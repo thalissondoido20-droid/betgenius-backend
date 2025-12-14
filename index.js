@@ -20,7 +20,7 @@ app.post(
       req.betgeniusOutput = result;
       next();
     } catch (err) {
-      console.error(err);
+      console.error("ANALYZE ERROR:", err);
       res.status(500).json({ error: "ANALYZE_FAILED" });
     }
   },
@@ -30,13 +30,7 @@ app.post(
   }
 );
 
-const PORT = process.env.PORT;
-
-if (!PORT) {
-  console.error("PORT not defined");
-  process.exit(1);
-}
-
-app.listen(PORT, "0.0.0.0", () => {
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
   console.log(`BetGenius API running on port ${PORT}`);
 });
