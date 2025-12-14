@@ -1,38 +1,20 @@
 const express = require("express");
+const analyzeRoute = require("./analyze");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.use(express.json());
 
 app.get("/", (req, res) => {
   res.send("BetGenius backend online 🚀");
 });
 
-// 👇 novas rotas aqui 👇
-
 app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "BetGenius Backend",
-    time: new Date()
-  });
+  res.json({ status: "ok" });
 });
 
-app.get("/analyze", (req, res) => {
-  const { home, away } = req.query;
+app.post("/analyze", analyzeRoute);
 
-  if (!home || !away) {
-    return res.status(400).json({
-      error: "Informe os times: home e away"
-    });
-  }
-
-  res.json({
-    match: `${home} x ${away}`,
-    analysis: "Análise inicial do BetGenius (em construção)",
-    confidence: "alta"
-  });
-});
-
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Servidor rodando na porta " + PORT);
 });
