@@ -4,7 +4,7 @@ export async function analyze(input) {
   const { league, home_team, away_team, market } = input || {};
 
   if (!league || !home_team || !away_team) {
-    throw new Error("Missing required fields: league, home_team, away_team");
+    throw new Error("Missing required fields");
   }
 
   return {
@@ -26,14 +26,8 @@ export async function analyze(input) {
     },
     signals: {
       tempo: "medium",
-      style_match: "controle vs transição",
-      volatility: "moderate",
-      pressure_index: 65
+      volatility: "moderate"
     },
-    notes: [
-      "Modelo MVP usando dados simulados",
-      "Fluxo pronto para integração com API real"
-    ],
-    limits: []
+    notes: ["MVP mock data"]
   };
 }
