@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import { analyze } from "./analisar.js";
-import { validateAnalyzeContractObserver } from "./middlewares/validateAnalyze.js";
 
 const app = express();
 
@@ -12,22 +11,15 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "BetGenius API" });
 });
 
-app.post(
-  "/analyze",
-  async (req, res, next) => {
-    try {
-      req.betgeniusOutput = await analyze(req.body);
-      next();
-    } catch (err) {
-      console.error("ANALYZE_FAILED:", err);
-      res.status(500).json({ error: "ANALYZE_FAILED" });
-    }
-  },
-  validateAnalyzeContractObserver,
-  (req, res) => {
-    res.json(req.betgeniusOutput);
+app.post("/analyze", async (req, res) => {
+  try {
+    const result = await analyze(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "ANALYZE_FAILED" });
   }
-);
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
