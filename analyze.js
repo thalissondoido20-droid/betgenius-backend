@@ -7,12 +7,6 @@ export async function analyze(input) {
     throw new Error("Missing required fields: league, home_team, away_team");
   }
 
-  // 🔹 MVP – métricas simuladas
-  const goal_expectancy_index = 70;
-  const probability_over_2_goals = 52;
-  const statistical_divergence = 0.18;
-  const confidence_score = 75;
-
   return {
     meta: {
       request_id: crypto.randomUUID(),
@@ -25,10 +19,10 @@ export async function analyze(input) {
       market: market || "goals"
     },
     metrics: {
-      goal_expectancy_index,
-      probability_over_2_goals,
-      statistical_divergence,
-      confidence_score
+      goal_expectancy_index: 70,
+      probability_over_2_goals: 52,
+      statistical_divergence: 0.18,
+      confidence_score: 75
     },
     signals: {
       tempo: "medium",
