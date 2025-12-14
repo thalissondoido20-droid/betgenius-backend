@@ -1,6 +1,15 @@
 import Ajv from "ajv";
 import addFormats from "ajv-formats";
-import analyzeSchema from "../contracts/analyze.schema.json" assert { type: "json" };
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// 🔹 Carregamento seguro do schema JSON
+const schemaPath = path.join(__dirname, "../contracts/analyze.schema.json");
+const analyzeSchema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 addFormats(ajv);
