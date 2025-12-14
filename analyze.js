@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 export async function analyze(input) {
   const { league, home_team, away_team, market } = input || {};
 
@@ -5,7 +7,7 @@ export async function analyze(input) {
     throw new Error("Missing required fields: league, home_team, away_team");
   }
 
-  // 🔹 MVP – métricas simuladas (fluxo técnico)
+  // 🔹 MVP – métricas simuladas
   const goal_expectancy_index = 70;
   const probability_over_2_goals = 52;
   const statistical_divergence = 0.18;
