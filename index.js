@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { analyze } from "./analisar.js";
-import { validateAnalyzeContract } from "./middlewares/validateAnalyze.js";
+import { validateAnalyzeContractObserver } from "./middlewares/validateAnalyze.js";
 
 const app = express();
 
@@ -16,15 +16,14 @@ app.post(
   "/analyze",
   async (req, res, next) => {
     try {
-      const result = await analyze(req.body);
-      req.betgeniusOutput = result;
+      req.betgeniusOutput = await analyze(req.body);
       next();
     } catch (err) {
-      console.error("ANALYZE ERROR:", err);
+      console.error("ANALYZE_FAILED:", err);
       res.status(500).json({ error: "ANALYZE_FAILED" });
     }
   },
-  validateAnalyzeContract,
+  validateAnalyzeContractObserver,
   (req, res) => {
     res.json(req.betgeniusOutput);
   }
