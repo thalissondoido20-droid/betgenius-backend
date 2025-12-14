@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://betgenius.app/contracts/analyze.schema.json",
+  "title": "BetGenius Analyze Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["input", "output"],
+  "properties": {
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["league", "home_team", "away_team", "market"],
+      "properties": {
+        "league": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "home_team": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "away_team": { "type": "string", "minLength": 2, "maxLength": 80 },
+
+        "market": {
+          "type": "string",
+          "enum": ["goals", "corners", "cards", "match"]
+        },
+
+        "time_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "last_n_matches": { "type": "integer", "minimum": 3, "maximum": 15, "default": 5 },
+            "home_away_split": { "type": "boolean", "default": true }
+          }
+        },
+
+        "match_context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "match_date": { "type": "string", "description": "ISO date (YYYY-MM-DD) if known" },
+            "round": { "type": "integer", "minimum": 1, "maximum": 60 },
+            "venue": { "type": "string", "maxLength": 120 }
+          }
+        },
+
+        "language": {
+          "type": "string",
+          "enum": ["pt-BR", "en"],
+          "default": "pt-BR"
+        }
+      }
+    },
+
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meta", "metrics", "signals", "notes", "limits"],
+      "properties": {
+        "meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["request_id", "timestamp_utc", "model_version", "data_provider"],
+          "properties": {
+            "request_id": { "type": "string", "minLength": 6, "maxLength": 64 },
+            "timestamp_utc": { "type": "string" },
+            "model_version": { "type": "string", "minLength": 3, "maxLength": 40 },
+            "data_provider": { "type": "string", "minLength": 2, "maxLength": 60 },
+            "league": { "type": "string" },
+            "home_team": { "type": "string" },
+            "away_team": { "type": "string" },
+            "market": { "type": "string" }
+          }
+        },
+
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goal_expectancy_index",
+            "probability_over_2_goals",
+            "statistical_divergence",
+            "confidence_score"
+          ],
+          "properties": {
+            "goal_expectancy_index": { "type": "number", "minimum": 0, "maximum": 100 },
+            "probability_over_2_goals": { "type": "number", "minimum": 0, "maximum": 100 },
+            "statistical_divergence": { "type": "number", "minimum": 0, "maximum": 10 },
+            "confidence_score": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        },
+
+        "signals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tempo", "style_match", "volatility", "pressure_index"],
+          "properties": {
+            "tempo": { "type": "string", "enum": ["low", "medium", "high"] },
+            "style_match": { "type": "string", "minLength": 3, "maxLength": 120 },
+            "volatility": { "type": "string", "enum": ["low", "moderate", "high"] },
+            "pressure_index": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        },
+
+        "notes": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 12,
+          "items": { "type": "string", "minLength": 6, "maxLength": 220 }
+        },
+
+        "limits": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": { "type": "string", "minLength": 4, "maxLength": 180 }
+        }
+      }
+    }
+  }
+}
