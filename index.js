@@ -147,6 +147,170 @@ app.get("/search-fixtures", searchFixturesHandler);
 app.get("/buscar-fixtures", searchFixturesHandler); // ✅ Alias
 
 // =================================================
+// 🔹 DEBUG FIXTURES (TEMPORÁRIO - REMOVER EM PRODUÇÃO)
+// =================================================
+app.get("/debug-fixtures", async (req, res) => {
+  try {
+    const { team, from, to } = req.query;
+
+    if (!team) {
+      return res.status(400).json({
+        error: "TEAM_REQUIRED",
+        message: "Parâmetro 'team' é obrigatório (ID numérico do time)",
+        example: "/debug-fixtures?team=42&from=2026-01-06&to=2026-01-10"
+      });
+    }
+
+    const teamId = Number(team);
+    if (isNaN(teamId) || teamId <= 0) {
+      return res.status(400).json({
+        error: "INVALID_TEAM_ID",
+        message: "Parâmetro 'team' deve ser um número válido maior que zero",
+        received: team
+      });
+    }
+
+    // Validar datas se fornecidas
+    if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({
+        error: "INVALID_DATE_FORMAT",
+        message: "Parâmetro 'from' deve estar no formato YYYY-MM-DD",
+        received: from
+      });
+    }
+
+    if (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({
+        error: "INVALID_DATE_FORMAT",
+        message: "Parâmetro 'to' deve estar no formato YYYY-MM-DD",
+        received: to
+      });
+    }
+
+    // Construir endpoint e params
+    const API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io";
+    const endpoint = "/fixtures";
+    const params = {
+      team: teamId,
+      ...(from && { from }),
+      ...(to && { to })
+    };
+
+    const url = new URL(`${API_FOOTBALL_BASE_URL}${endpoint}`);
+    Object.keys(params).forEach(key => {
+      if (params[key] !== undefined && params[key] !== null) {
+        url.searchParams.append(key, params[key]);
+      }
+    });
+
+    // Criar URL sem expor API key para log
+    const urlForDisplay = new URL(url.toString());
+    const endpointDisplay = `${urlForDisplay.origin}${urlForDisplay.pathname}?${urlForDisplay.searchParams.toString()}`;
+
+    // Fazer chamada à API
+    let apiStatus = null;
+    let apiResponse = null;
+    let rawCount = 0;
+    let sampleFixtures = [];
+    let apiErrorBody = null;
+
+    try {
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          "x-rapidapi-key": "99a0cbe06e8fbf2655f6cf562748f0c0",
+          "x-rapidapi-host": "v3.football.api-sports.io"
+        },
+        signal: AbortSignal.timeout(8000)
+      });
+
+      apiStatus = response.status;
+      
+      if (!response.ok) {
+        // Tentar ler o body do erro
+        try {
+          const errorText = await response.text();
+          apiErrorBody = errorText.substring(0, 500); // Limitar tamanho
+        } catch (e) {
+          apiErrorBody = "Não foi possível ler o corpo da resposta de erro";
+        }
+
+        return res.status(502).json({
+          error: "API_FOOTBALL_ERROR",
+          message: "A API-Football retornou um erro",
+          request: {
+            endpoint: endpointDisplay,
+            params: params
+          },
+          api_status: apiStatus,
+          api_error_body: apiErrorBody || "Sem detalhes disponíveis"
+        });
+      }
+
+      const data = await response.json();
+      
+      if (data.errors && Object.keys(data.errors).length > 0) {
+        apiErrorBody = JSON.stringify(data.errors).substring(0, 500);
+        return res.status(502).json({
+          error: "API_FOOTBALL_ERROR",
+          message: "A API-Football retornou erros no JSON",
+          request: {
+            endpoint: endpointDisplay,
+            params: params
+          },
+          api_status: apiStatus,
+          api_error_body: apiErrorBody || "Sem detalhes disponíveis"
+        });
+      }
+
+      apiResponse = data.response || [];
+      rawCount = apiResponse.length;
+
+      // Extrair amostra dos primeiros 2 fixtures
+      sampleFixtures = apiResponse.slice(0, 2).map(f => ({
+        fixture_id: f.fixture?.id || null,
+        date: f.fixture?.date || null,
+        league_name: f.league?.name || null,
+        teams: {
+          home_name: f.teams?.home?.name || null,
+          away_name: f.teams?.away?.name || null
+        }
+      }));
+
+      return res.json({
+        request: {
+          endpoint: endpointDisplay,
+          params: params
+        },
+        api_status: apiStatus,
+        raw_count: rawCount,
+        sample: sampleFixtures
+      });
+
+    } catch (fetchErr) {
+      console.error("DEBUG_FIXTURES_FETCH_ERROR:", fetchErr);
+      
+      return res.status(502).json({
+        error: "API_FOOTBALL_REQUEST_FAILED",
+        message: "Erro ao fazer requisição para API-Football",
+        request: {
+          endpoint: endpointDisplay,
+          params: params
+        },
+        api_status: null,
+        api_error_body: fetchErr.message || "Erro desconhecido na requisição"
+      });
+    }
+  } catch (err) {
+    console.error("DEBUG_FIXTURES_ERROR:", err);
+    return res.status(500).json({
+      error: "DEBUG_FIXTURES_FAILED",
+      message: err.message || "Erro interno ao processar debug"
+    });
+  }
+});
+
+// =================================================
 // 🔹 POST-GAME ROUND (CONTEÚDO PÓS-JOGO)
 // =================================================
 app.post("/postgame-round", async (req, res) => {
