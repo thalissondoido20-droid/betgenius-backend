@@ -92,7 +92,7 @@ const searchFixturesHandler = async (req, res) => {
     if (!team1) {
       return res.status(400).json({
         error: "TEAM1_REQUIRED",
-        message: "Informe o nome do time no parâmetro team1",
+        message: "Parameter 'team1' is required",
         example: "/search-fixtures?team1=Palmeiras&team2=Flamengo"
       });
     }
@@ -101,7 +101,7 @@ const searchFixturesHandler = async (req, res) => {
     if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) {
       return res.status(400).json({
         error: "INVALID_DATE_FORMAT",
-        message: "O parâmetro 'from' deve estar no formato YYYY-MM-DD",
+        message: "Parameter 'from' must be in YYYY-MM-DD format",
         received: from,
         example: "2024-01-15"
       });
@@ -110,7 +110,7 @@ const searchFixturesHandler = async (req, res) => {
     if (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       return res.status(400).json({
         error: "INVALID_DATE_FORMAT",
-        message: "O parâmetro 'to' deve estar no formato YYYY-MM-DD",
+        message: "Parameter 'to' must be in YYYY-MM-DD format",
         received: to,
         example: "2024-03-15"
       });
@@ -128,7 +128,7 @@ const searchFixturesHandler = async (req, res) => {
     if (result.error === "SEARCH_FAILED") {
       return res.status(502).json({
         error: "API_FOOTBALL_ERROR",
-        message: "Erro ao buscar dados na API-Football",
+        message: "Error fetching data from API-Football",
         details: result.message,
         fixtures: []
       });
@@ -139,7 +139,7 @@ const searchFixturesHandler = async (req, res) => {
     console.error("SEARCH_FIXTURES_ERROR:", err);
     return res.status(500).json({
       error: "SEARCH_FIXTURES_FAILED",
-      message: err.message || "Erro interno ao processar busca"
+      message: err.message || "Internal error processing search"
     });
   }
 };
@@ -156,7 +156,7 @@ app.get("/debug-fixtures", async (req, res) => {
     if (!team) {
       return res.status(400).json({
         error: "TEAM_REQUIRED",
-        message: "Parâmetro 'team' é obrigatório (ID numérico do time)",
+        message: "Parameter 'team' is required (numeric team ID)",
         example: "/debug-fixtures?team=42&from=2026-01-06&to=2026-01-10"
       });
     }
@@ -165,7 +165,7 @@ app.get("/debug-fixtures", async (req, res) => {
     if (isNaN(teamId) || teamId <= 0) {
       return res.status(400).json({
         error: "INVALID_TEAM_ID",
-        message: "Parâmetro 'team' deve ser um número válido maior que zero",
+        message: "Parameter 'team' must be a valid number greater than zero",
         received: team
       });
     }
@@ -174,7 +174,7 @@ app.get("/debug-fixtures", async (req, res) => {
     if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) {
       return res.status(400).json({
         error: "INVALID_DATE_FORMAT",
-        message: "Parâmetro 'from' deve estar no formato YYYY-MM-DD",
+        message: "Parameter 'from' must be in YYYY-MM-DD format",
         received: from
       });
     }
@@ -182,7 +182,7 @@ app.get("/debug-fixtures", async (req, res) => {
     if (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       return res.status(400).json({
         error: "INVALID_DATE_FORMAT",
-        message: "Parâmetro 'to' deve estar no formato YYYY-MM-DD",
+        message: "Parameter 'to' must be in YYYY-MM-DD format",
         received: to
       });
     }
@@ -262,7 +262,7 @@ app.get("/debug-fixtures", async (req, res) => {
           // Outros erros: retornar
           return res.status(502).json({
             error: "API_FOOTBALL_ERROR",
-            message: "A API-Football retornou um erro",
+            message: "API-Football returned an error",
             request: {
               endpoint: endpointDisplay,
               params: params
@@ -291,7 +291,7 @@ app.get("/debug-fixtures", async (req, res) => {
           // Outros erros: retornar
           return res.status(502).json({
             error: "API_FOOTBALL_ERROR",
-            message: "A API-Football retornou erros no JSON",
+            message: "API-Football returned errors in JSON",
             request: {
               endpoint: endpointDisplay,
               params: params
@@ -346,13 +346,13 @@ app.get("/debug-fixtures", async (req, res) => {
         // Última tentativa ou erro diferente: retornar erro
         return res.status(502).json({
           error: "API_FOOTBALL_REQUEST_FAILED",
-          message: "Erro ao fazer requisição para API-Football",
+          message: "Error making request to API-Football",
           request: {
             endpoint: endpointDisplay,
             params: params
           },
           api_status: null,
-          api_error_body: fetchErr.message || "Erro desconhecido na requisição",
+          api_error_body: fetchErr.message || "Unknown request error",
           debug: {
             seasons_tried: seasonsAttempted,
             last_attempted_season: season
@@ -380,7 +380,7 @@ app.get("/debug-fixtures", async (req, res) => {
     console.error("DEBUG_FIXTURES_ERROR:", err);
     return res.status(500).json({
       error: "DEBUG_FIXTURES_FAILED",
-      message: err.message || "Erro interno ao processar debug"
+      message: err.message || "Internal error processing debug"
     });
   }
 });
@@ -453,7 +453,7 @@ app.post("/analyze-from-api", async (req, res) => {
     if (!req.body || typeof req.body !== "object") {
       return res.status(400).json({
         error: "INVALID_BODY",
-        message: "Body deve ser um objeto JSON válido"
+        message: "Body must be a valid JSON object"
       });
     }
 
@@ -470,7 +470,7 @@ app.post("/analyze-from-api", async (req, res) => {
     if (!fixture_id) {
       return res.status(400).json({
         error: "FIXTURE_ID_REQUIRED",
-        message: "O campo fixture_id é obrigatório. Use /search-fixtures para encontrar o ID do jogo.",
+        message: "Field 'fixture_id' is required. Use /search-fixtures to find the match ID.",
         example: { fixture_id: 123456, profile: "technical" }
       });
     }
@@ -479,7 +479,7 @@ app.post("/analyze-from-api", async (req, res) => {
     if (isNaN(numericFixtureId) || numericFixtureId <= 0) {
       return res.status(400).json({
         error: "INVALID_FIXTURE_ID",
-        message: "fixture_id deve ser um número válido maior que zero",
+        message: "fixture_id must be a valid number greater than zero",
         received: fixture_id
       });
     }
@@ -495,7 +495,7 @@ app.post("/analyze-from-api", async (req, res) => {
       console.error("❌ Erro na API-Football:", apiErr.message);
       return res.status(404).json({
         error: "FIXTURE_NOT_FOUND",
-        message: `Não foi possível encontrar o jogo com ID ${numericFixtureId}`,
+        message: `Could not find match with ID ${numericFixtureId}`,
         details: apiErr.message
       });
     }
@@ -509,7 +509,7 @@ app.post("/analyze-from-api", async (req, res) => {
       console.error("❌ Erro na transformação:", transformErr.message);
       return res.status(422).json({
         error: "TRANSFORM_FAILED",
-        message: "Não foi possível processar os dados do jogo",
+        message: "Could not process match data",
         details: transformErr.message
       });
     }
@@ -526,7 +526,7 @@ app.post("/analyze-from-api", async (req, res) => {
       console.error("❌ Erro na análise:", analyzeErr.message);
       return res.status(422).json({
         error: "ANALYZE_FAILED",
-        message: "Não foi possível analisar o jogo",
+        message: "Could not analyze the match",
         details: analyzeErr.message
       });
     }
@@ -577,7 +577,7 @@ app.post("/analyze-from-api", async (req, res) => {
     // ✅ Sempre retorna JSON válido
     return res.status(500).json({
       error: "ANALYZE_FROM_API_FAILED",
-      message: err.message || "Erro interno ao processar análise"
+      message: err.message || "Internal error processing analysis"
     });
   }
 });
@@ -631,7 +631,7 @@ app.use((err, req, res, next) => {
   if (!res.headersSent) {
     res.status(500).json({
       error: "INTERNAL_SERVER_ERROR",
-      message: "Ocorreu um erro interno no servidor"
+      message: "An internal server error occurred"
     });
   }
 });

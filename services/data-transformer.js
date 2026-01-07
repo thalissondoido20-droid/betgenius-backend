@@ -24,13 +24,52 @@ function calculateAverage(values) {
 
 /**
  * Extrai estatísticas de time da API-Football
+ * Tolerante a diferentes formatos de dados (array, objeto, null)
  */
 function extractTeamStats(teamStatsData, isHome = true) {
-  if (!teamStatsData || teamStatsData.length === 0) {
-    return null;
+  // Normalizar para array se necessário
+  let normalizedData = null;
+  
+  if (!teamStatsData) {
+    normalizedData = [];
+  } else if (Array.isArray(teamStatsData)) {
+    normalizedData = teamStatsData;
+  } else if (typeof teamStatsData === 'object') {
+    // Se for objeto, pode ser um único item ou objeto com array interno
+    if (teamStatsData.response && Array.isArray(teamStatsData.response)) {
+      normalizedData = teamStatsData.response;
+    } else if (teamStatsData.fixtures && Array.isArray(teamStatsData.fixtures)) {
+      normalizedData = teamStatsData.fixtures;
+    } else if (teamStatsData.statistics && Array.isArray(teamStatsData.statistics)) {
+      // Único objeto com statistics
+      normalizedData = [teamStatsData];
+    } else {
+      // Tentar converter para array
+      normalizedData = Object.values(teamStatsData).filter(item => 
+        item && typeof item === 'object' && item.statistics
+      );
+    }
+  } else {
+    normalizedData = [];
   }
 
-  const stats = teamStatsData[0]?.statistics || [];
+  if (!normalizedData || normalizedData.length === 0) {
+    // Retornar estrutura vazia em vez de null para não quebrar o fluxo
+    return {
+      matches_used: 0,
+      goals_for_avg: 0,
+      goals_against_avg: 0,
+      corners_for_avg: 0,
+      corners_against_avg: 0,
+      yellow_cards_avg: 0,
+      shots_total_avg: 0,
+      possession_avg: 0,
+      raw_stats: {},
+      has_statistics: false
+    };
+  }
+
+  const stats = normalizedData[0]?.statistics || [];
   const statsMap = {};
   
   stats.forEach(stat => {
@@ -38,7 +77,7 @@ function extractTeamStats(teamStatsData, isHome = true) {
   });
 
   // Buscar últimos jogos para calcular médias
-  const recentMatches = teamStatsData.slice(0, 10); // Últimos 10 jogos
+  const recentMatches = normalizedData.slice(0, 10); // Últimos 10 jogos
   
   const goalsFor = recentMatches.map(m => {
     const goals = m.statistics?.find(s => s.type === "Goals")?.value || 0;
@@ -80,7 +119,8 @@ function extractTeamStats(teamStatsData, isHome = true) {
     shots_total_avg: calculateAverage(shots),
     possession_avg: calculateAverage(possession),
     // Dados adicionais da API
-    raw_stats: statsMap
+    raw_stats: statsMap,
+    has_statistics: normalizedData.length > 0 && stats.length > 0
   };
 }
 
@@ -258,7 +298,7 @@ function extractLeagueContext(standingsData, fixturesData) {
 function extractRefereeContext(fixture) {
   if (!fixture?.fixture?.referee) {
     return {
-      name: "Não informado",
+      name: null,
       yellow_cards_avg: 4.0,
       red_cards_avg: 0.2,
       penalties_per_match: 0.2,
@@ -306,13 +346,29 @@ export function transformAPIDataToAnalyzeFormat(apiData) {
     throw new Error("Fixture data is required");
   }
 
-  // Extrair estatísticas dos times
-  const homeStats = extractTeamStats(home_team_stats, true);
-  const awayStats = extractTeamStats(away_team_stats, false);
+  // Extrair estatísticas dos times (agora tolerante a dados ausentes)
+  let homeStats = extractTeamStats(home_team_stats, true);
+  let awayStats = extractTeamStats(away_team_stats, false);
 
-  if (!homeStats || !awayStats) {
-    throw new Error("Team statistics are required");
-  }
+  // Garantir que sempre tenham estrutura válida
+  const defaultStats = {
+    matches_used: 0,
+    goals_for_avg: 0,
+    goals_against_avg: 0,
+    corners_for_avg: 0,
+    corners_against_avg: 0,
+    yellow_cards_avg: 0,
+    shots_total_avg: 0,
+    possession_avg: 0,
+    raw_stats: {},
+    has_statistics: false
+  };
+  
+  if (!homeStats) homeStats = defaultStats;
+  if (!awayStats) awayStats = defaultStats;
+
+  // Não falhar se não houver estatísticas - retornar com flags meta
+  const hasStatistics = (homeStats?.has_statistics && awayStats?.has_statistics) || false;
 
   // Calcular corners_against baseado no oponente
   homeStats.corners_against_avg = awayStats.corners_for_avg;
@@ -334,7 +390,13 @@ export function transformAPIDataToAnalyzeFormat(apiData) {
       away_team: fixture.teams.away.name,
       fixture_id: fixture.fixture.id,
       date: fixture.fixture.date,
-      venue: fixture.fixture.venue?.name || "Não informado"
+      venue: fixture.fixture.venue?.name || null
+    },
+    meta: {
+      has_statistics: hasStatistics,
+      has_players: !!(home_players && away_players),
+      has_h2h: !!(h2h && h2h.length > 0),
+      has_lineups: !!(lineups && lineups.length > 0)
     },
 
     league_context: leagueContext,

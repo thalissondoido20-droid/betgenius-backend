@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: BetGenius API
-  description: API backend para análise estatística de futebol usando dados da API-Football
+  description: API backend for statistical football analysis using API-Football data
   version: 2.0.0
   contact:
     name: BetGenius Team
@@ -29,19 +29,19 @@ paths:
   /profiles:
     get:
       summary: Lista profiles disponíveis
-      description: Retorna lista de profiles de análise disponíveis
+      description: Returns list of available analysis profiles
       operationId: listProfiles
       tags:
         - System
       responses:
         '200':
-          description: Lista de profiles
+          description: List of profiles
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProfilesResponse'
         '500':
-          description: Erro ao carregar profiles
+          description: Error loading profiles
           content:
             application/json:
               schema:
@@ -49,8 +49,8 @@ paths:
   
   /search-fixtures:
     get:
-      summary: Busca jogos por nome de time
-      description: Busca fixtures (jogos) de um ou dois times usando janela de datas em 2 estágios. Estágio 1 (principal): Se from/to não forem fornecidos, usa janela padrão de -20 até +20 dias. Estágio 2 (verificação de integridade): Se a busca principal retornar 0 fixtures E a janela padrão foi usada, executa automaticamente uma busca ampla de -60 até +60 dias e retorna integrity_check com preview. Útil para o GPT identificar o fixture_id correto antes de analisar.
+      summary: Search matches by team name
+      description: Search fixtures (matches) for one or two teams using a 2-stage date window. Stage 1 (main): If from/to are not provided, uses default window of -20 to +20 days. Stage 2 (integrity check): If main search returns 0 fixtures AND default window was used, automatically executes a wide search of -60 to +60 days and returns integrity_check with preview. Useful for GPT to identify the correct fixture_id before analysis.
       operationId: searchFixtures
       tags:
         - Fixtures
@@ -58,21 +58,21 @@ paths:
         - name: team1
           in: query
           required: true
-          description: Nome do primeiro time
+          description: Name of the first team
           schema:
             type: string
           example: Palmeiras
         - name: team2
           in: query
           required: false
-          description: Nome do segundo time (opcional - filtra apenas confrontos entre os dois)
+          description: Name of the second team (optional - filters direct confrontations between the two teams)
           schema:
             type: string
           example: Flamengo
         - name: from
           in: query
           required: false
-          description: Data inicial da busca (formato YYYY-MM-DD). Se não fornecido, usa hoje-20 dias (janela padrão).
+          description: Start date of the search (YYYY-MM-DD format). If not provided, uses today-20 days (default window).
           schema:
             type: string
             format: date
@@ -81,7 +81,7 @@ paths:
         - name: to
           in: query
           required: false
-          description: Data final da busca (formato YYYY-MM-DD). Se não fornecido, usa hoje+20 dias (janela padrão).
+          description: End date of the search (YYYY-MM-DD format). If not provided, uses today+20 days (default window).
           schema:
             type: string
             format: date
@@ -90,7 +90,7 @@ paths:
         - name: season
           in: query
           required: false
-          description: Temporada (ano). Se não fornecido, será determinado automaticamente pelo backend: usa o ano de 'from' se fornecido, senão usa o ano atual. O backend tenta automaticamente o ano base e ano-1 para garantir resultados.
+          description: Season (year). If not provided, will be automatically determined by backend: uses year from 'from' if provided, otherwise uses current year. Backend automatically tries base year and year-1 to ensure results.
           schema:
             type: integer
             format: int32
@@ -98,26 +98,26 @@ paths:
         - name: league
           in: query
           required: false
-          description: ID da liga (opcional). Se fornecido com 'season', filtra por liga e temporada específicas.
+          description: League ID (optional). If provided with 'season', filters by specific league and season.
           schema:
             type: integer
             format: int32
           example: 71
       responses:
         '200':
-          description: Lista de fixtures encontrados
+          description: List of fixtures found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SearchFixturesResponse'
         '400':
-          description: Parâmetros inválidos
+          description: Invalid parameters
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
-          description: Erro interno
+          description: Internal server error
           content:
             application/json:
               schema:
@@ -125,8 +125,8 @@ paths:
   
   /analyze-from-api:
     post:
-      summary: Analisa um jogo usando dados da API-Football
-      description: Busca dados completos da API-Football para um fixture_id específico, analisa e retorna resultado formatado
+      summary: Analyzes a match using API-Football data
+      description: Fetches complete data from API-Football for a specific fixture_id, analyzes and returns formatted result
       operationId: analyzeFromApi
       tags:
         - Analysis
@@ -138,13 +138,13 @@ paths:
               $ref: '#/components/schemas/AnalyzeFromApiRequest'
       responses:
         '200':
-          description: Análise concluída com sucesso
+          description: Analysis completed successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AnalyzeFromApiResponse'
         '400':
-          description: Dados inválidos
+          description: Invalid data
           content:
             application/json:
               schema:
@@ -156,13 +156,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: Erro ao processar dados
+          description: Error processing data
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
-          description: Erro interno
+          description: Internal error
           content:
             application/json:
               schema:
@@ -371,12 +371,12 @@ components:
         error:
           type: string
           nullable: true
-          description: Código de erro (se houver)
+          description: Error code (if any)
           example: "TEAM_NOT_FOUND"
         message:
           type: string
           nullable: true
-          description: Mensagem de erro (se houver)
+          description: Error message (if any)
     
     AnalyzeFromApiRequest:
       type: object
@@ -386,16 +386,16 @@ components:
         fixture_id:
           type: integer
           format: int64
-          description: ID do jogo obtido via /search-fixtures
+          description: Match ID obtained via /search-fixtures
           example: 123456
         question:
           type: string
-          description: Pergunta do usuário (opcional)
+          description: User question (optional)
           example: ""
         profile:
           type: string
           enum: [technical, educational, creator]
-          description: Profile de análise desejado
+          description: Desired analysis profile
           default: technical
           example: technical
         mode:
@@ -409,12 +409,12 @@ components:
           format: int32
           minimum: 1
           maximum: 3
-          description: Nível de profundidade (1=iniciante, 2=intermediário, 3=avançado)
+          description: Depth level (1=beginner, 2=intermediate, 3=advanced)
           default: 1
           example: 1
         save_to_db:
           type: boolean
-          description: Salvar análise no MongoDB
+          description: Save analysis to MongoDB
           default: true
           example: true
     
@@ -448,10 +448,10 @@ components:
               nullable: true
         ux:
           type: object
-          description: Resposta formatada conforme o profile selecionado
+          description: Formatted response according to selected profile
         analysis:
           type: object
-          description: Análise completa com probabilidades e convergências
+          description: Complete analysis with probabilities and convergences
           properties:
             meta:
               type: object
@@ -478,16 +478,16 @@ components:
       properties:
         error:
           type: string
-          description: Código do erro
+          description: Error code
           example: FIXTURE_ID_REQUIRED
         message:
           type: string
-          description: Mensagem de erro descritiva
+          description: Descriptive error message
           example: "O campo fixture_id é obrigatório"
         details:
           type: string
           nullable: true
-          description: Detalhes adicionais do erro
+          description: Additional error details
         example:
           type: object
           nullable: true
