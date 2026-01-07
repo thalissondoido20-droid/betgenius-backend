@@ -1,0 +1,381 @@
+openapi: 3.1.0
+info:
+  title: BetGenius API
+  description: API backend para análise estatística de futebol usando dados da API-Football
+  version: 2.0.0
+  contact:
+    name: BetGenius Team
+
+servers:
+  - url: https://betgenius-backend-production.up.railway.app
+    description: Production server (Railway)
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Verifica o status do servidor
+      operationId: healthCheck
+      tags:
+        - System
+      responses:
+        '200':
+          description: Servidor está funcionando
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  
+  /profiles:
+    get:
+      summary: Lista profiles disponíveis
+      description: Retorna lista de profiles de análise disponíveis
+      operationId: listProfiles
+      tags:
+        - System
+      responses:
+        '200':
+          description: Lista de profiles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilesResponse'
+        '500':
+          description: Erro ao carregar profiles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  
+  /search-fixtures:
+    get:
+      summary: Busca jogos por nome de time
+      description: Busca fixtures (jogos) de um ou dois times. Útil para o GPT identificar o fixture_id correto antes de analisar.
+      operationId: searchFixtures
+      tags:
+        - Fixtures
+      parameters:
+        - name: team1
+          in: query
+          required: true
+          description: Nome do primeiro time
+          schema:
+            type: string
+          example: Palmeiras
+        - name: team2
+          in: query
+          required: false
+          description: Nome do segundo time (opcional - filtra apenas confrontos entre os dois)
+          schema:
+            type: string
+          example: Flamengo
+        - name: season
+          in: query
+          required: false
+          description: Temporada (ano)
+          schema:
+            type: integer
+            format: int32
+          example: 2024
+      responses:
+        '200':
+          description: Lista de fixtures encontrados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchFixturesResponse'
+        '400':
+          description: Parâmetros inválidos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  
+  /analyze-from-api:
+    post:
+      summary: Analisa um jogo usando dados da API-Football
+      description: Busca dados completos da API-Football para um fixture_id específico, analisa e retorna resultado formatado
+      operationId: analyzeFromApi
+      tags:
+        - Analysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyzeFromApiRequest'
+      responses:
+        '200':
+          description: Análise concluída com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyzeFromApiResponse'
+        '400':
+          description: Dados inválidos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Fixture não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Erro ao processar dados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: BetGenius API
+        version:
+          type: string
+          example: v2
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-07T12:00:00.000Z"
+    
+    ProfilesResponse:
+      type: object
+      properties:
+        version:
+          type: string
+          example: v1
+        available_profiles:
+          type: array
+          items:
+            type: string
+          example: ["technical", "educational", "creator"]
+    
+    Fixture:
+      type: object
+      properties:
+        fixture_id:
+          type: integer
+          format: int64
+          description: ID único do jogo na API-Football
+          example: 123456
+        date:
+          type: string
+          format: date-time
+          description: Data e hora do jogo
+          example: "2024-01-15T20:00:00+00:00"
+        status:
+          type: string
+          description: Status do jogo
+          example: "Not Started"
+        league:
+          $ref: '#/components/schemas/League'
+        home_team:
+          $ref: '#/components/schemas/Team'
+        away_team:
+          $ref: '#/components/schemas/Team'
+        score:
+          type: string
+          nullable: true
+          description: Placar do jogo (se já foi realizado)
+          example: "2 x 1"
+        venue:
+          type: string
+          nullable: true
+          description: Nome do estádio
+          example: "Allianz Parque"
+    
+    League:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int32
+          example: 71
+        name:
+          type: string
+          example: "Brasileirão"
+        country:
+          type: string
+          example: "Brazil"
+        round:
+          type: string
+          nullable: true
+          example: "Regular Season - 10"
+    
+    Team:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int32
+          example: 121
+        name:
+          type: string
+          example: "Palmeiras"
+        logo:
+          type: string
+          format: uri
+          nullable: true
+          example: "https://media.api-sports.io/football/teams/121.png"
+    
+    SearchFixturesResponse:
+      type: object
+      properties:
+        team_searched:
+          type: string
+          example: "Palmeiras"
+        team_id:
+          type: integer
+          format: int32
+          example: 121
+        team2_filter:
+          type: string
+          nullable: true
+          example: "Flamengo"
+        total_found:
+          type: integer
+          format: int32
+          description: Quantidade de jogos encontrados
+          example: 5
+        fixtures:
+          type: array
+          items:
+            $ref: '#/components/schemas/Fixture'
+    
+    AnalyzeFromApiRequest:
+      type: object
+      required:
+        - fixture_id
+      properties:
+        fixture_id:
+          type: integer
+          format: int64
+          description: ID do jogo obtido via /search-fixtures
+          example: 123456
+        question:
+          type: string
+          description: Pergunta do usuário (opcional)
+          example: ""
+        profile:
+          type: string
+          enum: [technical, educational, creator]
+          description: Profile de análise desejado
+          default: technical
+          example: technical
+        mode:
+          type: string
+          enum: [pre_game, post_game, round_analysis]
+          description: Modo de análise
+          default: pre_game
+          example: pre_game
+        level:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 3
+          description: Nível de profundidade (1=iniciante, 2=intermediário, 3=avançado)
+          default: 1
+          example: 1
+        save_to_db:
+          type: boolean
+          description: Salvar análise no MongoDB
+          default: true
+          example: true
+    
+    AnalyzeFromApiResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        mode:
+          type: string
+          example: analysis
+        profile:
+          type: string
+          example: technical
+        match:
+          type: object
+          properties:
+            fixture_id:
+              type: integer
+              format: int64
+            home_team:
+              type: string
+            away_team:
+              type: string
+            league:
+              type: string
+            date:
+              type: string
+              format: date-time
+              nullable: true
+        ux:
+          type: object
+          description: Resposta formatada conforme o profile selecionado
+        analysis:
+          type: object
+          description: Análise completa com probabilidades e convergências
+          properties:
+            meta:
+              type: object
+            outcome_probabilities:
+              type: object
+            convergences:
+              type: array
+            pre_game_blocks:
+              type: object
+        data_summary:
+          type: object
+          properties:
+            has_statistics:
+              type: boolean
+            has_h2h:
+              type: boolean
+            has_lineups:
+              type: boolean
+            has_standings:
+              type: boolean
+    
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Código do erro
+          example: FIXTURE_ID_REQUIRED
+        message:
+          type: string
+          description: Mensagem de erro descritiva
+          example: "O campo fixture_id é obrigatório"
+        details:
+          type: string
+          nullable: true
+          description: Detalhes adicionais do erro
+        example:
+          type: object
+          nullable: true
+          description: Exemplo de uso correto (quando aplicável)

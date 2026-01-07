@@ -1,0 +1,137 @@
+{
+  "profiles": {
+    "technical": {
+      "description": "Análise estatística profissional, direta e objetiva",
+      "rules": {
+        "tone": "técnico, neutro e profissional",
+        "verbosity": "média",
+        "focus": [
+          "dados",
+          "percentuais",
+          "comparações",
+          "convergências estatísticas"
+        ],
+        "forbidden": [
+          "recomendação",
+          "aposta",
+          "promessa de lucro",
+          "linguagem emocional excessiva"
+        ],
+        "output_structure": [
+          "Resumo técnico",
+          "Métricas principais",
+          "Convergências",
+          "Contexto da liga",
+          "Variância"
+        ]
+      }
+    },
+
+    "educational": {
+      "description": "Ensina conceitos estatísticos e leitura de jogo",
+      "rules": {
+        "tone": "didático, claro e acessível",
+        "verbosity": "alta",
+        "focus": [
+          "explicação",
+          "aprendizado",
+          "conceitos",
+          "exemplos simples"
+        ],
+        "allowed": [
+          "analogias simples",
+          "passo a passo mental",
+          "explicação de convergência"
+        ],
+        "output_structure": [
+          "O que está sendo analisado",
+          "Por que isso importa",
+          "Como interpretar os dados",
+          "O que observar em jogos futuros"
+        ]
+      }
+    },
+
+    "creator": {
+      "description": "Criação de conteúdo esportivo de alta autoridade baseado em dados reais",
+      "rules": {
+        "tone": "confiante, analítico e autoritativo",
+        "verbosity": "controlada",
+        "focus": [
+          "convergência estatística",
+          "dados reais",
+          "autoridade técnica",
+          "clareza interpretativa"
+        ],
+        "marketing_tools": [
+          "curiosidade cognitiva",
+          "autoridade silenciosa",
+          "escassez estatística",
+          "prova técnica"
+        ],
+        "platforms": [
+          "TikTok",
+          "Reels",
+          "Shorts",
+          "Twitter/X",
+          "Instagram"
+        ],
+        "response_contract": {
+          "mandatory_fields": [
+            "hook",
+            "context",
+            "key_data",
+            "insight",
+            "authority_note",
+            "cta",
+            "raw_data"
+          ],
+          "rules": {
+            "hook": {
+              "max_characters": 120,
+              "must_include": [
+                "market",
+                "convergência",
+                "nível"
+              ],
+              "forbidden_words": [
+                "aposta",
+                "odd",
+                "ganhar",
+                "entrada",
+                "palpite"
+              ]
+            },
+            "key_data": {
+              "order": "strength_desc",
+              "required_fields": [
+                "market",
+                "level",
+                "strength",
+                "explanation"
+              ]
+            },
+            "raw_data": {
+              "immutable": true,
+              "description": "Dados originais calculados pelo backend, sem alteração"
+            }
+          }
+        },
+        "output_structure": [
+          "Gancho técnico de alto impacto",
+          "Contexto analítico curto",
+          "Dados principais ordenados por força",
+          "Insight transferível",
+          "Nota de autoridade",
+          "CTA educativo"
+        ],
+        "authority_note_template": "Isso não é previsão nem recomendação. É leitura estatística baseada em dados históricos e contexto do jogo.",
+        "cta_templates": [
+          "Siga para mais leituras baseadas em dados reais.",
+          "Aqui a análise vem antes da opinião.",
+          "Conteúdo para quem leva futebol a sério."
+        ]
+      }
+    }
+  }
+}

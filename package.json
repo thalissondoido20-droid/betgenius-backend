@@ -9,7 +9,9 @@
     "node": "18.x"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "express": "^4.22.1",
+    "mongodb": "^7.0.0",
+    "zod": "^4.2.1"
   }
 }
