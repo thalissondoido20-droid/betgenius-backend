@@ -307,9 +307,46 @@ function formatFixture(f) {
 }
 
 /**
+ * Busca fixtures por team ID com tentativa dupla de season (obrigatório pela API)
+ */
+async function fetchFixturesWithSeasonFallback(teamId, params, seasonsToTry = []) {
+  let lastError = null;
+  
+  for (const season of seasonsToTry) {
+    const searchParams = { ...params, season: season };
+    
+    try {
+      console.log(`📅 Tentando season ${season}...`);
+      let fixtures = await apiRequest("/fixtures", searchParams);
+      
+      // Se retornou array (mesmo que vazio), consideramos sucesso
+      if (Array.isArray(fixtures)) {
+        return { fixtures, season, error: null };
+      }
+    } catch (err) {
+      lastError = err;
+      const errorMsg = err.message || "";
+      
+      // Se for erro de "season required", tentar próxima season
+      if (errorMsg.includes("Season") || errorMsg.includes("season")) {
+        console.log(`⚠️ Erro com season ${season}, tentando próxima...`);
+        continue;
+      }
+      
+      // Outros erros: retornar vazio mas manter o erro
+      return { fixtures: [], season, error: lastError };
+    }
+  }
+  
+  // Todas as tentativas falharam
+  return { fixtures: [], season: seasonsToTry[0] || null, error: lastError };
+}
+
+/**
  * Busca fixtures por nome de time com 2 estágios:
  * 1) Busca principal: -20/+20 dias (padrão)
  * 2) Verificação de integridade: -60/+60 dias (se principal = 0)
+ * ✅ SEMPRE inclui season (obrigatório pela API-Football)
  */
 export async function searchFixturesByTeam(team1, options = {}) {
   const {
@@ -367,7 +404,21 @@ export async function searchFixturesByTeam(team1, options = {}) {
       usingDefaultWindow = true;
     }
 
-    // 3. Busca principal
+    // 3. Determinar season (obrigatório pela API)
+    let baseYear;
+    if (from) {
+      // Usar ano de 'from'
+      baseYear = new Date(from).getUTCFullYear();
+    } else {
+      // Usar ano atual
+      baseYear = now.getUTCFullYear();
+    }
+    
+    // Season fornecida pelo usuário tem prioridade, senão usar baseYear
+    const primarySeason = season ? Number(season) : baseYear;
+    const seasonsToTry = [primarySeason, primarySeason - 1]; // Tentar ano atual e anterior
+
+    // 4. Busca principal com tentativa dupla de season
     const searchParams = {
       team: team1Id,
       from: searchFrom,
@@ -376,14 +427,11 @@ export async function searchFixturesByTeam(team1, options = {}) {
 
     if (league) {
       searchParams.league = Number(league);
-      if (season) {
-        searchParams.season = Number(season);
-      }
     }
 
-    console.log(`📅 Busca principal: ${searchFrom} até ${searchTo}...`);
-    let fixtures = await apiRequest("/fixtures", searchParams);
-    fixtures = fixtures || [];
+    console.log(`📅 Busca principal: ${searchFrom} até ${searchTo}, seasons: [${seasonsToTry.join(', ')}]...`);
+    const primaryResult = await fetchFixturesWithSeasonFallback(team1Id, searchParams, seasonsToTry);
+    let fixtures = primaryResult.fixtures || [];
 
     // 4. Filtrar por team2 se especificado
     let filteredFixtures = await filterByTeam2(fixtures, team2);
@@ -422,13 +470,11 @@ export async function searchFixturesByTeam(team1, options = {}) {
 
       if (league) {
         wideParams.league = Number(league);
-        if (season) {
-          wideParams.season = Number(season);
-        }
       }
 
-      let wideFixtures = await apiRequest("/fixtures", wideParams);
-      wideFixtures = wideFixtures || [];
+      // Tentativa dupla também na verificação de integridade
+      const wideResult = await fetchFixturesWithSeasonFallback(team1Id, wideParams, seasonsToTry);
+      let wideFixtures = wideResult.fixtures || [];
 
       // Filtrar por team2 também na busca ampla
       let wideFiltered = await filterByTeam2(wideFixtures, team2);
@@ -457,6 +503,7 @@ export async function searchFixturesByTeam(team1, options = {}) {
         from: searchFrom,
         to: searchTo
       },
+      season_used: primaryResult.season || primarySeason,
       total_found: formattedFixtures.length,
       fixtures: formattedFixtures,
       integrity_check: integrityCheck

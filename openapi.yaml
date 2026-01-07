@@ -90,7 +90,7 @@ paths:
         - name: season
           in: query
           required: false
-          description: Temporada (ano). Funciona em conjunto com 'league'.
+          description: Temporada (ano). Se não fornecido, será determinado automaticamente pelo backend: usa o ano de 'from' se fornecido, senão usa o ano atual. O backend tenta automaticamente o ano base e ano-1 para garantir resultados.
           schema:
             type: integer
             format: int32
@@ -317,6 +317,12 @@ components:
               type: string
               format: date
               example: "2024-03-31"
+        season_used:
+          type: integer
+          format: int32
+          nullable: true
+          description: Season (ano) que foi usada com sucesso na busca. Determinado automaticamente pelo backend (ano de 'from' ou ano atual) e pode tentar ano-1 automaticamente.
+          example: 2024
         total_found:
           type: integer
           format: int32

@@ -187,120 +187,195 @@ app.get("/debug-fixtures", async (req, res) => {
       });
     }
 
+    // Determinar season (obrigatório pela API)
+    const now = new Date();
+    let baseYear;
+    if (from) {
+      baseYear = new Date(from).getUTCFullYear();
+    } else {
+      baseYear = now.getUTCFullYear();
+    }
+    
+    const seasonsToTry = [baseYear, baseYear - 1];
+
     // Construir endpoint e params
     const API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io";
     const endpoint = "/fixtures";
-    const params = {
+    const baseParams = {
       team: teamId,
       ...(from && { from }),
       ...(to && { to })
     };
 
-    const url = new URL(`${API_FOOTBALL_BASE_URL}${endpoint}`);
-    Object.keys(params).forEach(key => {
-      if (params[key] !== undefined && params[key] !== null) {
-        url.searchParams.append(key, params[key]);
-      }
-    });
-
-    // Criar URL sem expor API key para log
-    const urlForDisplay = new URL(url.toString());
-    const endpointDisplay = `${urlForDisplay.origin}${urlForDisplay.pathname}?${urlForDisplay.searchParams.toString()}`;
-
-    // Fazer chamada à API
+    // Tentativa dupla com diferentes seasons
     let apiStatus = null;
     let apiResponse = null;
     let rawCount = 0;
     let sampleFixtures = [];
     let apiErrorBody = null;
+    const seasonsAttempted = [];
+    let successfulSeason = null;
 
-    try {
-      const response = await fetch(url.toString(), {
-        method: "GET",
-        headers: {
-          "x-rapidapi-key": "99a0cbe06e8fbf2655f6cf562748f0c0",
-          "x-rapidapi-host": "v3.football.api-sports.io"
-        },
-        signal: AbortSignal.timeout(8000)
+    for (const season of seasonsToTry) {
+      seasonsAttempted.push(season);
+      
+      const params = { ...baseParams, season };
+      
+      const url = new URL(`${API_FOOTBALL_BASE_URL}${endpoint}`);
+      Object.keys(params).forEach(key => {
+        if (params[key] !== undefined && params[key] !== null) {
+          url.searchParams.append(key, params[key]);
+        }
       });
 
-      apiStatus = response.status;
-      
-      if (!response.ok) {
-        // Tentar ler o body do erro
-        try {
-          const errorText = await response.text();
-          apiErrorBody = errorText.substring(0, 500); // Limitar tamanho
-        } catch (e) {
-          apiErrorBody = "Não foi possível ler o corpo da resposta de erro";
+      // Criar URL sem expor API key para log
+      const urlForDisplay = new URL(url.toString());
+      const endpointDisplay = `${urlForDisplay.origin}${urlForDisplay.pathname}?${urlForDisplay.searchParams.toString()}`;
+
+      try {
+        const response = await fetch(url.toString(), {
+          method: "GET",
+          headers: {
+            "x-rapidapi-key": "99a0cbe06e8fbf2655f6cf562748f0c0",
+            "x-rapidapi-host": "v3.football.api-sports.io"
+          },
+          signal: AbortSignal.timeout(8000)
+        });
+
+        apiStatus = response.status;
+        
+        if (!response.ok) {
+          // Tentar ler o body do erro
+          try {
+            const errorText = await response.text();
+            apiErrorBody = errorText.substring(0, 500);
+            
+            // Se for erro de season, tentar próxima
+            if (errorText.includes("Season") || errorText.includes("season")) {
+              console.log(`⚠️ Season ${season} falhou, tentando próxima...`);
+              continue;
+            }
+          } catch (e) {
+            apiErrorBody = "Não foi possível ler o corpo da resposta de erro";
+          }
+
+          // Outros erros: retornar
+          return res.status(502).json({
+            error: "API_FOOTBALL_ERROR",
+            message: "A API-Football retornou um erro",
+            request: {
+              endpoint: endpointDisplay,
+              params: params
+            },
+            api_status: apiStatus,
+            api_error_body: apiErrorBody || "Sem detalhes disponíveis",
+            debug: {
+              seasons_tried: seasonsAttempted,
+              last_attempted_season: season
+            }
+          });
         }
 
-        return res.status(502).json({
-          error: "API_FOOTBALL_ERROR",
-          message: "A API-Football retornou um erro",
+        const data = await response.json();
+        
+        if (data.errors && Object.keys(data.errors).length > 0) {
+          apiErrorBody = JSON.stringify(data.errors).substring(0, 500);
+          
+          // Se for erro de season, tentar próxima
+          const errorStr = apiErrorBody.toLowerCase();
+          if (errorStr.includes("season")) {
+            console.log(`⚠️ Season ${season} retornou erro, tentando próxima...`);
+            continue;
+          }
+          
+          // Outros erros: retornar
+          return res.status(502).json({
+            error: "API_FOOTBALL_ERROR",
+            message: "A API-Football retornou erros no JSON",
+            request: {
+              endpoint: endpointDisplay,
+              params: params
+            },
+            api_status: apiStatus,
+            api_error_body: apiErrorBody || "Sem detalhes disponíveis",
+            debug: {
+              seasons_tried: seasonsAttempted,
+              last_attempted_season: season
+            }
+          });
+        }
+
+        // Sucesso!
+        apiResponse = data.response || [];
+        rawCount = apiResponse.length;
+        successfulSeason = season;
+
+        // Extrair amostra dos primeiros 2 fixtures
+        sampleFixtures = apiResponse.slice(0, 2).map(f => ({
+          fixture_id: f.fixture?.id || null,
+          date: f.fixture?.date || null,
+          league_name: f.league?.name || null,
+          teams: {
+            home_name: f.teams?.home?.name || null,
+            away_name: f.teams?.away?.name || null
+          }
+        }));
+
+        return res.json({
           request: {
             endpoint: endpointDisplay,
             params: params
           },
           api_status: apiStatus,
-          api_error_body: apiErrorBody || "Sem detalhes disponíveis"
+          raw_count: rawCount,
+          sample: sampleFixtures,
+          debug: {
+            seasons_tried: seasonsAttempted,
+            successful_season: successfulSeason
+          }
         });
-      }
 
-      const data = await response.json();
-      
-      if (data.errors && Object.keys(data.errors).length > 0) {
-        apiErrorBody = JSON.stringify(data.errors).substring(0, 500);
+      } catch (fetchErr) {
+        // Se for erro de timeout ou network, tentar próxima season se ainda tiver
+        if (seasonsAttempted.length < seasonsToTry.length && 
+            (fetchErr.name === "AbortError" || fetchErr.message.includes("timeout"))) {
+          console.log(`⚠️ Erro de rede com season ${season}, tentando próxima...`);
+          continue;
+        }
+        
+        // Última tentativa ou erro diferente: retornar erro
         return res.status(502).json({
-          error: "API_FOOTBALL_ERROR",
-          message: "A API-Football retornou erros no JSON",
+          error: "API_FOOTBALL_REQUEST_FAILED",
+          message: "Erro ao fazer requisição para API-Football",
           request: {
             endpoint: endpointDisplay,
             params: params
           },
-          api_status: apiStatus,
-          api_error_body: apiErrorBody || "Sem detalhes disponíveis"
+          api_status: null,
+          api_error_body: fetchErr.message || "Erro desconhecido na requisição",
+          debug: {
+            seasons_tried: seasonsAttempted,
+            last_attempted_season: season
+          }
         });
       }
-
-      apiResponse = data.response || [];
-      rawCount = apiResponse.length;
-
-      // Extrair amostra dos primeiros 2 fixtures
-      sampleFixtures = apiResponse.slice(0, 2).map(f => ({
-        fixture_id: f.fixture?.id || null,
-        date: f.fixture?.date || null,
-        league_name: f.league?.name || null,
-        teams: {
-          home_name: f.teams?.home?.name || null,
-          away_name: f.teams?.away?.name || null
-        }
-      }));
-
-      return res.json({
-        request: {
-          endpoint: endpointDisplay,
-          params: params
-        },
-        api_status: apiStatus,
-        raw_count: rawCount,
-        sample: sampleFixtures
-      });
-
-    } catch (fetchErr) {
-      console.error("DEBUG_FIXTURES_FETCH_ERROR:", fetchErr);
-      
-      return res.status(502).json({
-        error: "API_FOOTBALL_REQUEST_FAILED",
-        message: "Erro ao fazer requisição para API-Football",
-        request: {
-          endpoint: endpointDisplay,
-          params: params
-        },
-        api_status: null,
-        api_error_body: fetchErr.message || "Erro desconhecido na requisição"
-      });
     }
+
+    // Se chegou aqui, todas as tentativas falharam
+    return res.status(502).json({
+      error: "API_FOOTBALL_ALL_SEASONS_FAILED",
+      message: "Todas as tentativas de season falharam",
+      request: {
+        endpoint: endpointDisplay,
+        params: baseParams
+      },
+      api_status: apiStatus,
+      api_error_body: apiErrorBody || "Nenhuma season retornou dados válidos",
+      debug: {
+        seasons_tried: seasonsAttempted,
+        last_attempted_season: seasonsToTry[seasonsToTry.length - 1]
+      }
+    });
   } catch (err) {
     console.error("DEBUG_FIXTURES_ERROR:", err);
     return res.status(500).json({
