@@ -219,77 +219,266 @@ export async function getStandings(leagueId, season) {
 }
 
 /**
- * Busca fixtures por nome de time (para o GPT identificar o jogo correto)
- * Retorna jogos futuros e recentes de um ou dois times
+ * Formata data para YYYY-MM-DD (UTC)
  */
-export async function searchFixturesByTeam(team1, team2 = null, season = new Date().getFullYear()) {
+function formatDate(date) {
+  const d = new Date(date);
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Ordena fixtures por data (mais próxima de hoje primeiro)
+ */
+function sortFixturesByDate(fixtures) {
+  const now = new Date();
+  return fixtures.sort((a, b) => {
+    const dateA = new Date(a.fixture.date);
+    const dateB = new Date(b.fixture.date);
+    const diffA = Math.abs(dateA - now);
+    const diffB = Math.abs(dateB - now);
+    return diffA - diffB;
+  });
+}
+
+/**
+ * Filtra fixtures por team2
+ */
+async function filterByTeam2(fixtures, team2) {
+  if (!team2 || !fixtures || fixtures.length === 0) {
+    return fixtures;
+  }
+
+  // Buscar ID do team2 para filtro mais preciso
+  const team2Search = await apiRequest("/teams", { search: team2 });
+  let team2Id = null;
+  
+  if (team2Search && team2Search.length > 0) {
+    team2Id = team2Search[0].team.id;
+  }
+
+  const team2Lower = team2.toLowerCase();
+  return fixtures.filter(f => {
+    if (team2Id) {
+      // Filtro por ID (mais preciso)
+      return f.teams?.home?.id === team2Id || f.teams?.away?.id === team2Id;
+    } else {
+      // Filtro por nome (fallback)
+      const homeName = f.teams?.home?.name?.toLowerCase() || "";
+      const awayName = f.teams?.away?.name?.toLowerCase() || "";
+      return homeName.includes(team2Lower) || awayName.includes(team2Lower);
+    }
+  });
+}
+
+/**
+ * Formata fixture para resposta
+ */
+function formatFixture(f) {
+  return {
+    fixture_id: f.fixture.id,
+    date: f.fixture.date,
+    status: f.fixture.status.short || f.fixture.status.long,
+    league: {
+      id: f.league.id,
+      name: f.league.name,
+      season: f.league.season
+    },
+    teams: {
+      home: {
+        id: f.teams.home.id,
+        name: f.teams.home.name,
+        logo: f.teams.home.logo
+      },
+      away: {
+        id: f.teams.away.id,
+        name: f.teams.away.name,
+        logo: f.teams.away.logo
+      }
+    },
+    score: f.goals ? {
+      home: f.goals.home,
+      away: f.goals.away
+    } : null,
+    venue: f.fixture.venue?.name || null
+  };
+}
+
+/**
+ * Busca fixtures por nome de time com 2 estágios:
+ * 1) Busca principal: -20/+20 dias (padrão)
+ * 2) Verificação de integridade: -60/+60 dias (se principal = 0)
+ */
+export async function searchFixturesByTeam(team1, options = {}) {
+  const {
+    team2 = null,
+    from = null,
+    to = null,
+    season = null,
+    league = null
+  } = options;
+
   try {
     console.log(`🔍 Buscando jogos: ${team1}${team2 ? ` vs ${team2}` : ""}...`);
 
-    // Primeiro, buscar o ID do time pelo nome
+    // 1. Buscar ID do time pelo nome
     const teamsSearch = await apiRequest("/teams", { search: team1 });
     
     if (!teamsSearch || teamsSearch.length === 0) {
-      return { error: "TEAM_NOT_FOUND", team: team1, fixtures: [] };
+      return { 
+        error: "TEAM_NOT_FOUND", 
+        team: team1, 
+        team_id: null,
+        team2_filter: team2 || null,
+        total_found: 0,
+        fixtures: [],
+        integrity_check: {
+          ran: false,
+          from: null,
+          to: null,
+          found_in_wider_window: false,
+          wide_total_found: 0
+        }
+      };
     }
 
     const team1Data = teamsSearch[0];
     const team1Id = team1Data.team.id;
 
-    // Buscar fixtures do time
-    const fixtures = await apiRequest("/fixtures", {
-      team: team1Id,
-      season: season,
-      last: 10, // Últimos 10 jogos
-      next: 5   // Próximos 5 jogos
-    });
+    const now = new Date();
+    let searchFrom, searchTo;
+    let usingDefaultWindow = false;
 
-    // Se team2 foi especificado, filtrar apenas confrontos entre os dois
-    let filteredFixtures = fixtures;
-    if (team2) {
-      const team2Lower = team2.toLowerCase();
-      filteredFixtures = fixtures.filter(f => {
-        const homeName = f.teams?.home?.name?.toLowerCase() || "";
-        const awayName = f.teams?.away?.name?.toLowerCase() || "";
-        return homeName.includes(team2Lower) || awayName.includes(team2Lower);
-      });
+    // 2. Calcular janela de datas
+    if (from && to) {
+      // Usuário forneceu datas explícitas - respeitar
+      searchFrom = from;
+      searchTo = to;
+    } else {
+      // Usar janela padrão: -20 até +20 dias
+      const defaultFrom = new Date(now);
+      defaultFrom.setUTCDate(defaultFrom.getUTCDate() - 20);
+      const defaultTo = new Date(now);
+      defaultTo.setUTCDate(defaultTo.getUTCDate() + 20);
+      searchFrom = formatDate(defaultFrom);
+      searchTo = formatDate(defaultTo);
+      usingDefaultWindow = true;
     }
 
-    // Formatar resposta para o GPT
-    const formattedFixtures = filteredFixtures.map(f => ({
-      fixture_id: f.fixture.id,
-      date: f.fixture.date,
-      status: f.fixture.status.long,
-      league: {
-        id: f.league.id,
-        name: f.league.name,
-        country: f.league.country,
-        round: f.league.round
-      },
-      home_team: {
-        id: f.teams.home.id,
-        name: f.teams.home.name,
-        logo: f.teams.home.logo
-      },
-      away_team: {
-        id: f.teams.away.id,
-        name: f.teams.away.name,
-        logo: f.teams.away.logo
-      },
-      score: f.goals ? `${f.goals.home ?? "-"} x ${f.goals.away ?? "-"}` : null,
-      venue: f.fixture.venue?.name || null
-    }));
+    // 3. Busca principal
+    const searchParams = {
+      team: team1Id,
+      from: searchFrom,
+      to: searchTo
+    };
+
+    if (league) {
+      searchParams.league = Number(league);
+      if (season) {
+        searchParams.season = Number(season);
+      }
+    }
+
+    console.log(`📅 Busca principal: ${searchFrom} até ${searchTo}...`);
+    let fixtures = await apiRequest("/fixtures", searchParams);
+    fixtures = fixtures || [];
+
+    // 4. Filtrar por team2 se especificado
+    let filteredFixtures = await filterByTeam2(fixtures, team2);
+
+    // 5. Ordenar por data (mais próxima primeiro)
+    filteredFixtures = sortFixturesByDate(filteredFixtures);
+
+    // 6. Formatar fixtures principais
+    const formattedFixtures = filteredFixtures.map(formatFixture);
+
+    // 7. Verificação de integridade (somente se busca principal = 0 E usando janela padrão)
+    let integrityCheck = {
+      ran: false,
+      from: null,
+      to: null,
+      found_in_wider_window: false,
+      wide_total_found: 0
+    };
+
+    if (formattedFixtures.length === 0 && usingDefaultWindow) {
+      console.log(`🔍 Verificação de integridade: expandindo para janela ampla...`);
+      
+      const wideFrom = new Date(now);
+      wideFrom.setUTCDate(wideFrom.getUTCDate() - 60);
+      const wideTo = new Date(now);
+      wideTo.setUTCDate(wideTo.getUTCDate() + 60);
+      
+      const wideFromStr = formatDate(wideFrom);
+      const wideToStr = formatDate(wideTo);
+
+      const wideParams = {
+        team: team1Id,
+        from: wideFromStr,
+        to: wideToStr
+      };
+
+      if (league) {
+        wideParams.league = Number(league);
+        if (season) {
+          wideParams.season = Number(season);
+        }
+      }
+
+      let wideFixtures = await apiRequest("/fixtures", wideParams);
+      wideFixtures = wideFixtures || [];
+
+      // Filtrar por team2 também na busca ampla
+      let wideFiltered = await filterByTeam2(wideFixtures, team2);
+      wideFiltered = sortFixturesByDate(wideFiltered);
+
+      integrityCheck = {
+        ran: true,
+        from: wideFromStr,
+        to: wideToStr,
+        found_in_wider_window: wideFiltered.length > 0,
+        wide_total_found: wideFiltered.length
+      };
+
+      // Se encontrou na janela ampla, incluir preview (máx 3)
+      if (wideFiltered.length > 0) {
+        const preview = wideFiltered.slice(0, 3).map(formatFixture);
+        integrityCheck.wide_fixtures_preview = preview;
+      }
+    }
 
     return {
       team_searched: team1Data.team.name,
       team_id: team1Id,
       team2_filter: team2 || null,
+      date_range: {
+        from: searchFrom,
+        to: searchTo
+      },
       total_found: formattedFixtures.length,
-      fixtures: formattedFixtures
+      fixtures: formattedFixtures,
+      integrity_check: integrityCheck
     };
   } catch (err) {
     console.error(`❌ Erro ao buscar fixtures por time:`, err.message);
-    return { error: "SEARCH_FAILED", message: err.message, fixtures: [] };
+    return { 
+      error: "SEARCH_FAILED", 
+      message: err.message, 
+      team_searched: team1,
+      team_id: null,
+      team2_filter: team2 || null,
+      total_found: 0,
+      fixtures: [],
+      integrity_check: {
+        ran: false,
+        from: null,
+        to: null,
+        found_in_wider_window: false,
+        wide_total_found: 0
+      }
+    };
   }
 }
 

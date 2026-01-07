@@ -87,7 +87,7 @@ app.get("/perfis", profilesHandler); // ✅ Alias
 // =================================================
 const searchFixturesHandler = async (req, res) => {
   try {
-    const { team1, team2, season } = req.query;
+    const { team1, team2, from, to, season, league } = req.query;
 
     if (!team1) {
       return res.status(400).json({
@@ -97,18 +97,49 @@ const searchFixturesHandler = async (req, res) => {
       });
     }
 
-    const result = await searchFixturesByTeam(
-      team1,
-      team2 || null,
-      season ? Number(season) : new Date().getFullYear()
-    );
+    // Validar formato de datas se fornecidas
+    if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({
+        error: "INVALID_DATE_FORMAT",
+        message: "O parâmetro 'from' deve estar no formato YYYY-MM-DD",
+        received: from,
+        example: "2024-01-15"
+      });
+    }
+
+    if (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({
+        error: "INVALID_DATE_FORMAT",
+        message: "O parâmetro 'to' deve estar no formato YYYY-MM-DD",
+        received: to,
+        example: "2024-03-15"
+      });
+    }
+
+    const result = await searchFixturesByTeam(team1, {
+      team2: team2 || null,
+      from: from || null,
+      to: to || null,
+      season: season ? Number(season) : null,
+      league: league ? Number(league) : null
+    });
+
+    // Se houver erro na busca, retornar 502 se for erro da API externa
+    if (result.error === "SEARCH_FAILED") {
+      return res.status(502).json({
+        error: "API_FOOTBALL_ERROR",
+        message: "Erro ao buscar dados na API-Football",
+        details: result.message,
+        fixtures: []
+      });
+    }
 
     return res.json(result);
   } catch (err) {
     console.error("SEARCH_FIXTURES_ERROR:", err);
     return res.status(500).json({
       error: "SEARCH_FIXTURES_FAILED",
-      message: err.message
+      message: err.message || "Erro interno ao processar busca"
     });
   }
 };
