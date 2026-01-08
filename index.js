@@ -116,6 +116,46 @@ const searchFixturesHandler = async (req, res) => {
       });
     }
 
+    // Importar funções de cache
+    const { getFinderCache, saveFinderCache } = await import("./services/cache-manager.js");
+
+    // Verificar cache
+    const queryParams = {
+      team1,
+      team2: team2 || null,
+      from: from || null,
+      to: to || null,
+      season: season || null,
+      league: league || null
+    };
+
+    const cacheResult = await getFinderCache(queryParams);
+    let cacheMeta = {
+      hit: false,
+      stale: false,
+      ttl_seconds: 0,
+      cached_at: null,
+      key: cacheResult.key
+    };
+
+    // Se cache válido, retornar do cache
+    if (cacheResult.found && cacheResult.cache && !cacheResult.stale) {
+      console.log(`✅ Cache HIT para finder query: ${cacheResult.key}`);
+      cacheMeta = {
+        hit: true,
+        stale: false,
+        ttl_seconds: cacheResult.ttl_seconds,
+        cached_at: cacheResult.cache.cached_at,
+        key: cacheResult.key
+      };
+
+      return res.json({
+        ...cacheResult.cache.response,
+        cache: cacheMeta
+      });
+    }
+
+    // Cache miss ou stale: buscar da API
     const result = await searchFixturesByTeam(team1, {
       team2: team2 || null,
       from: from || null,
@@ -130,11 +170,31 @@ const searchFixturesHandler = async (req, res) => {
         error: "API_FOOTBALL_ERROR",
         message: "Error fetching data from API-Football",
         details: result.message,
-        fixtures: []
+        fixtures: [],
+        cache: cacheMeta
       });
     }
 
-    return res.json(result);
+    // Extrair debug_meta se disponível (seasons_tried, season_used)
+    const debugMeta = {
+      season_used: result.season_used || null
+    };
+
+    // Salvar no cache
+    const saveResult = await saveFinderCache(queryParams, result, debugMeta);
+
+    cacheMeta = {
+      hit: false,
+      stale: cacheResult.stale,
+      ttl_seconds: saveResult.ttl_seconds || 3600,
+      cached_at: new Date().toISOString(),
+      key: saveResult.key || cacheResult.key
+    };
+
+    return res.json({
+      ...result,
+      cache: cacheMeta
+    });
   } catch (err) {
     console.error("SEARCH_FIXTURES_ERROR:", err);
     return res.status(500).json({
@@ -486,19 +546,39 @@ app.post("/analyze-from-api", async (req, res) => {
 
     console.log(`🔍 Iniciando análise para fixture ${numericFixtureId}...`);
 
-    // 1. Buscar dados completos da API-Football
+    // 1. Buscar dados completos da API-Football (com cache)
     let apiData;
+    let cacheMeta = {
+      hit: false,
+      stale: false,
+      revalidated: false,
+      force_revalidate_reason: null,
+      ttl_seconds: 0,
+      cached_at: null
+    };
+    
     try {
       apiData = await getCompleteMatchData(numericFixtureId);
       console.log("✅ Dados da API-Football coletados");
+      
+      // Extrair metadados de cache da resposta
+      if (apiData.cache_meta) {
+        cacheMeta = apiData.cache_meta;
+        delete apiData.cache_meta; // Remover da resposta (já incluído separadamente)
+      }
     } catch (apiErr) {
       console.error("❌ Erro na API-Football:", apiErr.message);
       return res.status(404).json({
         error: "FIXTURE_NOT_FOUND",
         message: `Could not find match with ID ${numericFixtureId}`,
-        details: apiErr.message
+        details: apiErr.message,
+        cache: cacheMeta
       });
     }
+
+    // Extrair completeness dos dados
+    const completeness = apiData.completeness || {};
+    delete apiData.completeness; // Remover da resposta (já incluído separadamente)
 
     // 2. Transformar dados para formato do analisar.js
     let analyzeFormat;
@@ -510,7 +590,9 @@ app.post("/analyze-from-api", async (req, res) => {
       return res.status(422).json({
         error: "TRANSFORM_FAILED",
         message: "Could not process match data",
-        details: transformErr.message
+        details: transformErr.message,
+        cache: cacheMeta,
+        completeness
       });
     }
 
@@ -527,7 +609,9 @@ app.post("/analyze-from-api", async (req, res) => {
       return res.status(422).json({
         error: "ANALYZE_FAILED",
         message: "Could not analyze the match",
-        details: analyzeErr.message
+        details: analyzeErr.message,
+        cache: cacheMeta,
+        completeness
       });
     }
 
@@ -540,7 +624,17 @@ app.post("/analyze-from-api", async (req, res) => {
       level: Number(level) || 1
     });
 
-    // 5. Salvar no MongoDB (não falha a requisição)
+    // 5. Salvar análise e UX no cache (se disponível)
+    try {
+      const { saveMatchCache } = await import("./services/cache-manager.js");
+      await saveMatchCache(numericFixtureId, apiData, analyzeFormat, analysis);
+      
+      // TODO: Salvar UX cache por profile (opcional, pode ser implementado depois)
+    } catch (cacheErr) {
+      console.warn("⚠️ Erro ao salvar análise no cache (continuando):", cacheErr.message);
+    }
+
+    // 6. Salvar no MongoDB (não falha a requisição)
     if (save_to_db) {
       try {
         await saveAnalysis(analysis, apiData);
@@ -550,20 +644,22 @@ app.post("/analyze-from-api", async (req, res) => {
       }
     }
 
-    // ✅ Resposta final estruturada
+    // ✅ Resposta final estruturada com metadados de cache
     return res.json({
       success: true,
-      mode: modeResult.mode,
+      mode: modeResult.mode || "pre_game",
       profile: finalProfile,
       match: {
-        fixture_id: apiData.meta.fixture_id,
-        home_team: apiData.meta.home_team_name,
-        away_team: apiData.meta.away_team_name,
-        league: apiData.meta.league_name,
+        fixture_id: apiData.meta?.fixture_id || numericFixtureId,
+        home_team: apiData.meta?.home_team_name,
+        away_team: apiData.meta?.away_team_name,
+        league: apiData.meta?.league_name,
         date: apiData.fixture?.fixture?.date
       },
       ux,
       analysis,
+      completeness,
+      cache: cacheMeta,
       data_summary: {
         has_statistics: !!apiData.statistics?.length,
         has_h2h: !!apiData.h2h?.length,

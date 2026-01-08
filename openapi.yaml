@@ -368,6 +368,33 @@ components:
               description: Preview de até 3 fixtures da janela ampla (apenas se found_in_wider_window=true)
               items:
                 $ref: '#/components/schemas/Fixture'
+        cache:
+          type: object
+          description: Cache metadata for the search result
+          properties:
+            hit:
+              type: boolean
+              description: Whether the result was served from cache
+              example: true
+            stale:
+              type: boolean
+              description: Whether the cache was stale (expired)
+              example: false
+            ttl_seconds:
+              type: integer
+              format: int32
+              description: Time to live in seconds remaining
+              example: 3600
+            cached_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: When the cache was created
+              example: "2024-01-15T10:30:00Z"
+            key:
+              type: string
+              description: Cache key (hash of query parameters)
+              example: "a1b2c3d4e5f6..."
         error:
           type: string
           nullable: true
@@ -449,6 +476,67 @@ components:
         ux:
           type: object
           description: Formatted response according to selected profile
+        completeness:
+          type: object
+          description: Data completeness flags indicating what data is available
+          properties:
+            has_lineups:
+              type: boolean
+              description: Whether lineup data is available
+              example: true
+            has_injuries:
+              type: boolean
+              description: Whether injury data is available
+              example: false
+            has_statistics:
+              type: boolean
+              description: Whether statistics data is available
+              example: true
+            has_h2h:
+              type: boolean
+              description: Whether head-to-head data is available
+              example: true
+            has_standings:
+              type: boolean
+              description: Whether standings data is available
+              example: true
+            has_last5:
+              type: boolean
+              description: Whether last 5 matches data is available
+              example: false
+        cache:
+          type: object
+          description: Cache metadata for the match data
+          properties:
+            hit:
+              type: boolean
+              description: Whether the data was served from cache
+              example: true
+            stale:
+              type: boolean
+              description: Whether the cache was stale (expired)
+              example: false
+            revalidated:
+              type: boolean
+              description: Whether the cache was revalidated on this request
+              example: false
+            force_revalidate_reason:
+              type: string
+              nullable: true
+              description: Reason for forcing revalidation (if any)
+              enum: [STATUS_CHANGED, INCOMPLETE_NEAR_KICKOFF, BUDGET_NEAR_LIMIT, null]
+              example: null
+            ttl_seconds:
+              type: integer
+              format: int32
+              description: Time to live in seconds remaining
+              example: 21600
+            cached_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: When the cache was created
+              example: "2024-01-15T10:30:00Z"
         analysis:
           type: object
           description: Complete analysis with probabilities and convergences
@@ -461,8 +549,70 @@ components:
               type: array
             pre_game_blocks:
               type: object
+        completeness:
+          type: object
+          description: Data completeness flags indicating what data is available
+          properties:
+            has_lineups:
+              type: boolean
+              description: Whether lineup data is available
+              example: true
+            has_injuries:
+              type: boolean
+              description: Whether injury data is available
+              example: false
+            has_statistics:
+              type: boolean
+              description: Whether statistics data is available
+              example: true
+            has_h2h:
+              type: boolean
+              description: Whether head-to-head data is available
+              example: true
+            has_standings:
+              type: boolean
+              description: Whether standings data is available
+              example: true
+            has_last5:
+              type: boolean
+              description: Whether last 5 matches data is available
+              example: false
+        cache:
+          type: object
+          description: Cache metadata for the match data
+          properties:
+            hit:
+              type: boolean
+              description: Whether the data was served from cache
+              example: true
+            stale:
+              type: boolean
+              description: Whether the cache was stale (expired)
+              example: false
+            revalidated:
+              type: boolean
+              description: Whether the cache was revalidated on this request
+              example: false
+            force_revalidate_reason:
+              type: string
+              nullable: true
+              description: Reason for forcing revalidation (if any)
+              enum: [STATUS_CHANGED, INCOMPLETE_NEAR_KICKOFF, BUDGET_NEAR_LIMIT, null]
+              example: null
+            ttl_seconds:
+              type: integer
+              format: int32
+              description: Time to live in seconds remaining
+              example: 21600
+            cached_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: When the cache was created
+              example: "2024-01-15T10:30:00Z"
         data_summary:
           type: object
+          description: Legacy data availability summary (deprecated, use completeness instead)
           properties:
             has_statistics:
               type: boolean

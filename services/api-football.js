@@ -543,8 +543,73 @@ export async function getCompleteMatchData(fixtureId) {
   const numericFixtureId = Number(fixtureId);
   console.log(`🔍 Buscando dados completos para fixture ${numericFixtureId}...`);
 
+  // Importar funções de cache (lazy import para evitar circular dependency)
+  const { getMatchCache, saveMatchCache, shouldForceRevalidate, computeCompleteness } = await import("./cache-manager.js");
+
   try {
-    // Buscar fixture primeiro (obrigatório)
+    // 1. Verificar cache primeiro
+    const cacheResult = await getMatchCache(numericFixtureId);
+    let cacheMeta = {
+      hit: false,
+      stale: false,
+      revalidated: false,
+      force_revalidate_reason: null,
+      ttl_seconds: 0,
+      cached_at: null
+    };
+
+    if (cacheResult.found && cacheResult.cache) {
+      const cached = cacheResult.cache;
+      const cachedStatus = cached.status;
+      const cachedFixtureDate = cached.fixture_date;
+
+      // Buscar status atual do fixture para verificar mudanças
+      let currentStatus = cachedStatus;
+      try {
+        const currentFixtures = await getFixture(numericFixtureId);
+        if (currentFixtures?.[0]) {
+          currentStatus = currentFixtures[0].fixture?.status?.short || cachedStatus;
+        }
+      } catch (err) {
+        // Se falhar ao buscar status, usar status do cache
+        console.warn("⚠️ Não foi possível verificar status atual, usando cache");
+      }
+
+      // Verificar se deve forçar revalidação
+      const forceCheck = shouldForceRevalidate({
+        cached_status: cachedStatus,
+        current_status: currentStatus,
+        fixture_date: cachedFixtureDate,
+        completeness: cached.completeness || {}
+      });
+
+      // Se cache válido e não precisa forçar revalidação
+      if (!cacheResult.stale && !forceCheck.force) {
+        console.log(`✅ Cache HIT para fixture ${numericFixtureId}`);
+        cacheMeta = {
+          hit: true,
+          stale: false,
+          revalidated: false,
+          force_revalidate_reason: null,
+          ttl_seconds: cacheResult.ttl_seconds,
+          cached_at: cached.cached_at
+        };
+
+        // Retornar dados do cache
+        const cachedData = cached.api_data || {};
+        return {
+          ...cachedData,
+          cache_meta: cacheMeta,
+          completeness: cached.completeness || {}
+        };
+      }
+
+      // Cache stale ou precisa revalidar
+      cacheMeta.force_revalidate_reason = forceCheck.reason;
+      console.log(`🔄 Revalidando cache para fixture ${numericFixtureId} (${forceCheck.reason || 'stale'})`);
+    }
+
+    // 2. Buscar dados da API (cache miss ou revalidação)
     const fixtures = await getFixture(numericFixtureId);
     const fixture = fixtures?.[0];
     
@@ -585,7 +650,7 @@ export async function getCompleteMatchData(fixtureId) {
     // ✅ Extrair valores com fallback seguro
     const getValue = (result) => result.status === "fulfilled" ? result.value : null;
 
-    return {
+    const apiData = {
       fixture: fixture,
       statistics: getValue(statistics),
       events: getValue(events),
@@ -611,6 +676,22 @@ export async function getCompleteMatchData(fixtureId) {
         away_team_name: fixture.teams?.away?.name,
         collected_at: new Date().toISOString()
       }
+    };
+
+    // 3. Calcular completeness e salvar cache
+    const completeness = computeCompleteness(apiData);
+    const saveResult = await saveMatchCache(numericFixtureId, apiData, null, null);
+
+    cacheMeta.hit = false;
+    cacheMeta.stale = cacheResult.stale;
+    cacheMeta.revalidated = true;
+    cacheMeta.ttl_seconds = saveResult.ttl_seconds || 0;
+    cacheMeta.cached_at = new Date().toISOString();
+
+    return {
+      ...apiData,
+      cache_meta: cacheMeta,
+      completeness: completeness
     };
   } catch (err) {
     console.error(`❌ Erro ao buscar dados completos do jogo ${fixtureId}:`, err.message);
