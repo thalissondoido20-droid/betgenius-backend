@@ -272,24 +272,35 @@ function sortFixturesByDate(fixtures) {
 /**
  * Filtra fixtures por team2
  */
-async function filterByTeam2(fixtures, team2) {
+async function filterByTeam2(fixtures, team2, team2Id = null) {
   if (!team2 || !fixtures || fixtures.length === 0) {
     return fixtures;
   }
 
-  // Buscar ID do team2 para filtro mais preciso
-  const team2Search = await apiRequest("/teams", { search: team2 });
-  let team2Id = null;
-  
-  if (team2Search && team2Search.length > 0) {
-    team2Id = team2Search[0].team.id;
+  // Se team2Id já foi fornecido, usar diretamente (mais eficiente)
+  if (team2Id) {
+    return fixtures.filter(f => {
+      return f.teams?.home?.id === team2Id || f.teams?.away?.id === team2Id;
+    });
+  }
+
+  // Fallback: buscar ID do team2 se não fornecido
+  let resolvedTeam2Id = null;
+  try {
+    const team2Search = await apiRequest("/teams", { search: team2 });
+    if (team2Search && team2Search.length > 0) {
+      resolvedTeam2Id = team2Search[0].team.id;
+    }
+  } catch (err) {
+    // Se falhar, usar filtro por nome como fallback
+    console.warn(`⚠️ Não foi possível buscar ID do team2 "${team2}", usando filtro por nome`);
   }
 
   const team2Lower = team2.toLowerCase();
   return fixtures.filter(f => {
-    if (team2Id) {
+    if (resolvedTeam2Id) {
       // Filtro por ID (mais preciso)
-      return f.teams?.home?.id === team2Id || f.teams?.away?.id === team2Id;
+      return f.teams?.home?.id === resolvedTeam2Id || f.teams?.away?.id === resolvedTeam2Id;
     } else {
       // Filtro por nome (fallback)
       const homeName = f.teams?.home?.name?.toLowerCase() || "";
@@ -376,6 +387,7 @@ async function fetchFixturesWithSeasonFallback(teamId, params, seasonsToTry = []
 
 /**
  * Resolve team ID pelo nome (com tratamento robusto de erros)
+ * Retorna objeto { id, name } ou null se não encontrar
  */
 export async function resolveTeamIdByName(name) {
   try {
@@ -386,7 +398,11 @@ export async function resolveTeamIdByName(name) {
       return null;
     }
     
-    return teamsSearch[0].team.id;
+    const teamData = teamsSearch[0].team;
+    return {
+      id: teamData.id,
+      name: teamData.name
+    };
   } catch (err) {
     // Re-lançar erros da API para tratamento adequado no handler
     throw err;
@@ -410,12 +426,13 @@ export async function searchFixturesByTeam(team1, options = {}) {
 
   try {
     console.log(`🔍 Buscando jogos: ${team1}${team2 ? ` vs ${team2}` : ""}...`);
+    // Teste: /search-fixtures?team1=Arsenal&team2=Liverpool&from=2026-01-06&to=2026-01-10&season=2025
 
     // 1. Buscar ID do time pelo nome (com tratamento de erros)
-    let team1Id;
+    let team1Pick;
     try {
-      team1Id = await resolveTeamIdByName(team1);
-      if (!team1Id) {
+      team1Pick = await resolveTeamIdByName(team1);
+      if (!team1Pick || !team1Pick.id) {
         return { 
           error: "TEAM_NOT_FOUND", 
           team: team1, 
@@ -435,6 +452,23 @@ export async function searchFixturesByTeam(team1, options = {}) {
     } catch (apiErr) {
       // Erro da API externa - re-lançar para tratamento no handler
       throw apiErr;
+    }
+
+    const team1Id = team1Pick.id;
+    const team1Name = team1Pick.name || team1;
+
+    // Resolver team2 se fornecido
+    let team2Id = null;
+    if (team2) {
+      try {
+        const team2Pick = await resolveTeamIdByName(team2);
+        if (team2Pick && team2Pick.id) {
+          team2Id = team2Pick.id;
+        }
+      } catch (apiErr) {
+        // Se team2 falhar, continuar sem filtrar (não é crítico)
+        console.warn(`⚠️ Não foi possível resolver team2 "${team2}":`, apiErr.message);
+      }
     }
 
 
@@ -487,8 +521,8 @@ export async function searchFixturesByTeam(team1, options = {}) {
     const primaryResult = await fetchFixturesWithSeasonFallback(team1Id, searchParams, seasonsToTry);
     let fixtures = primaryResult.fixtures || [];
 
-    // 4. Filtrar por team2 se especificado
-    let filteredFixtures = await filterByTeam2(fixtures, team2);
+    // 4. Filtrar por team2 se especificado (passando team2Id se já foi resolvido)
+    let filteredFixtures = await filterByTeam2(fixtures, team2, team2Id);
 
     // 5. Ordenar por data (mais próxima primeiro)
     filteredFixtures = sortFixturesByDate(filteredFixtures);
@@ -530,8 +564,8 @@ export async function searchFixturesByTeam(team1, options = {}) {
       const wideResult = await fetchFixturesWithSeasonFallback(team1Id, wideParams, seasonsToTry);
       let wideFixtures = wideResult.fixtures || [];
 
-      // Filtrar por team2 também na busca ampla
-      let wideFiltered = await filterByTeam2(wideFixtures, team2);
+      // Filtrar por team2 também na busca ampla (passando team2Id se já foi resolvido)
+      let wideFiltered = await filterByTeam2(wideFixtures, team2, team2Id);
       wideFiltered = sortFixturesByDate(wideFiltered);
 
       integrityCheck = {
@@ -550,7 +584,7 @@ export async function searchFixturesByTeam(team1, options = {}) {
     }
 
     return {
-      team_searched: team1Data.team.name,
+      team_searched: team1Name,
       team_id: team1Id,
       team2_filter: team2 || null,
       date_range: {
