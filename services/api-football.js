@@ -50,25 +50,37 @@ async function apiRequest(endpoint, params = {}, timeout = API_TIMEOUT_MS) {
     const response = await fetch(url.toString(), {
       method: "GET",
       headers: {
-        "x-rapidapi-key": API_KEY,
-        "x-rapidapi-host": "v3.football.api-sports.io"
+        "x-apisports-key": API_KEY
       },
       signal: controller.signal
     });
 
     clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      throw new Error(`API-Football error: ${response.status} ${response.statusText}`);
-    }
-
     const data = await response.json();
     
     // ✅ Tratamento robusto de erros da API
     if (data.errors && Object.keys(data.errors).length > 0) {
-      console.warn(`⚠️ API-Football warnings ${endpoint}:`, data.errors);
-      // Não lança erro, apenas retorna array vazio para não quebrar o fluxo
-      return [];
+      const errorDetails = data.errors;
+      console.error(`❌ API-Football errors ${endpoint}:`, errorDetails);
+      // Lançar erro estruturado para tratamento adequado
+      const apiError = new Error("API_FOOTBALL_ERROR");
+      apiError.name = "API_FOOTBALL_ERROR";
+      apiError.details = errorDetails;
+      apiError.status = response.status;
+      apiError.endpoint = endpoint;
+      apiError.params = params;
+      throw apiError;
+    }
+
+    if (!response.ok) {
+      const httpError = new Error(`API_FOOTBALL_HTTP_ERROR`);
+      httpError.name = "API_FOOTBALL_HTTP_ERROR";
+      httpError.status = response.status;
+      httpError.statusText = response.statusText;
+      httpError.endpoint = endpoint;
+      httpError.params = params;
+      throw httpError;
     }
 
     return data.response || [];
@@ -77,11 +89,25 @@ async function apiRequest(endpoint, params = {}, timeout = API_TIMEOUT_MS) {
     
     if (err.name === "AbortError") {
       console.error(`⏱️ Timeout na requisição API-Football ${endpoint} (${timeout}ms)`);
-      return []; // Retorna vazio em vez de quebrar
+      const timeoutError = new Error("API_FOOTBALL_TIMEOUT");
+      timeoutError.name = "API_FOOTBALL_TIMEOUT";
+      timeoutError.endpoint = endpoint;
+      timeoutError.params = params;
+      throw timeoutError;
+    }
+    
+    // Re-lançar erros estruturados
+    if (err.name === "API_FOOTBALL_ERROR" || err.name === "API_FOOTBALL_HTTP_ERROR" || err.name === "API_FOOTBALL_TIMEOUT") {
+      throw err;
     }
     
     console.error(`❌ Erro na requisição API-Football ${endpoint}:`, err.message);
-    return []; // Retorna vazio em vez de quebrar
+    const genericError = new Error("API_FOOTBALL_REQUEST_ERROR");
+    genericError.name = "API_FOOTBALL_REQUEST_ERROR";
+    genericError.message = err.message;
+    genericError.endpoint = endpoint;
+    genericError.params = params;
+    throw genericError;
   }
 }
 
@@ -325,6 +351,12 @@ async function fetchFixturesWithSeasonFallback(teamId, params, seasonsToTry = []
       }
     } catch (err) {
       lastError = err;
+      
+      // Re-lançar erros da API imediatamente (não tentar outras seasons)
+      if (err.name && err.name.startsWith("API_FOOTBALL_")) {
+        throw err;
+      }
+      
       const errorMsg = err.message || "";
       
       // Se for erro de "season required", tentar próxima season
@@ -338,8 +370,27 @@ async function fetchFixturesWithSeasonFallback(teamId, params, seasonsToTry = []
     }
   }
   
-  // Todas as tentativas falharam
+  // Todas as tentativas falharam (mas não foi erro da API)
   return { fixtures: [], season: seasonsToTry[0] || null, error: lastError };
+}
+
+/**
+ * Resolve team ID pelo nome (com tratamento robusto de erros)
+ */
+export async function resolveTeamIdByName(name) {
+  try {
+    const teamsSearch = await apiRequest("/teams", { search: name });
+    
+    // Se realmente não encontrou time
+    if (!teamsSearch || teamsSearch.length === 0) {
+      return null;
+    }
+    
+    return teamsSearch[0].team.id;
+  } catch (err) {
+    // Re-lançar erros da API para tratamento adequado no handler
+    throw err;
+  }
 }
 
 /**
@@ -360,29 +411,32 @@ export async function searchFixturesByTeam(team1, options = {}) {
   try {
     console.log(`🔍 Buscando jogos: ${team1}${team2 ? ` vs ${team2}` : ""}...`);
 
-    // 1. Buscar ID do time pelo nome
-    const teamsSearch = await apiRequest("/teams", { search: team1 });
-    
-    if (!teamsSearch || teamsSearch.length === 0) {
-      return { 
-        error: "TEAM_NOT_FOUND", 
-        team: team1, 
-        team_id: null,
-        team2_filter: team2 || null,
-        total_found: 0,
-        fixtures: [],
-        integrity_check: {
-          ran: false,
-          from: null,
-          to: null,
-          found_in_wider_window: false,
-          wide_total_found: 0
-        }
-      };
+    // 1. Buscar ID do time pelo nome (com tratamento de erros)
+    let team1Id;
+    try {
+      team1Id = await resolveTeamIdByName(team1);
+      if (!team1Id) {
+        return { 
+          error: "TEAM_NOT_FOUND", 
+          team: team1, 
+          team_id: null,
+          team2_filter: team2 || null,
+          total_found: 0,
+          fixtures: [],
+          integrity_check: {
+            ran: false,
+            from: null,
+            to: null,
+            found_in_wider_window: false,
+            wide_total_found: 0
+          }
+        };
+      }
+    } catch (apiErr) {
+      // Erro da API externa - re-lançar para tratamento no handler
+      throw apiErr;
     }
 
-    const team1Data = teamsSearch[0];
-    const team1Id = team1Data.team.id;
 
     const now = new Date();
     let searchFrom, searchTo;
@@ -510,6 +564,13 @@ export async function searchFixturesByTeam(team1, options = {}) {
     };
   } catch (err) {
     console.error(`❌ Erro ao buscar fixtures por time:`, err.message);
+    
+    // Re-lançar erros da API para tratamento adequado no handler
+    if (err.name && err.name.startsWith("API_FOOTBALL_")) {
+      throw err;
+    }
+    
+    // Outros erros: retornar SEARCH_FAILED
     return { 
       error: "SEARCH_FAILED", 
       message: err.message, 

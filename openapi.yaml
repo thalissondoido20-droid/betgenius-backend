@@ -47,6 +47,156 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
   
+  /debug-team-search:
+    get:
+      summary: Debug endpoint for team search (TEMPORARY - REMOVE IN PRODUCTION)
+      description: Debug endpoint to test team search in API-Football
+      operationId: debugTeamSearch
+      tags:
+        - Debug
+      parameters:
+        - name: name
+          in: query
+          required: true
+          description: Team name to search
+          schema:
+            type: string
+            example: Arsenal
+      responses:
+        '200':
+          description: Team search debug information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request:
+                    type: object
+                    properties:
+                      endpoint:
+                        type: string
+                      params:
+                        type: object
+                  api_status:
+                    type: integer
+                  api_errors:
+                    type: object
+                    nullable: true
+                  raw_count:
+                    type: integer
+                  sample:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        name:
+                          type: string
+                  normalized_pick:
+                    type: integer
+                    nullable: true
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: API-Football error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  
+  /debug-fixture:
+    get:
+      summary: Debug endpoint for fixture lookup (TEMPORARY - REMOVE IN PRODUCTION)
+      description: Debug endpoint to test fixture lookup in API-Football
+      operationId: debugFixture
+      tags:
+        - Debug
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: Fixture ID
+          schema:
+            type: integer
+            format: int64
+            example: 1379169
+      responses:
+        '200':
+          description: Fixture debug information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request:
+                    type: object
+                    properties:
+                      endpoint:
+                        type: string
+                      params:
+                        type: object
+                  api_status:
+                    type: integer
+                  api_errors:
+                    type: object
+                    nullable: true
+                  has_response:
+                    type: boolean
+                  fixture_summary:
+                    type: object
+                    nullable: true
+                    properties:
+                      id:
+                        type: integer
+                      date:
+                        type: string
+                        format: date-time
+                      status:
+                        type: string
+                      league:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                          name:
+                            type: string
+                          season:
+                            type: integer
+                      teams:
+                        type: object
+                        properties:
+                          home:
+                            type: object
+                            properties:
+                              id:
+                                type: integer
+                              name:
+                                type: string
+                          away:
+                            type: object
+                            properties:
+                              id:
+                                type: integer
+                              name:
+                                type: string
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: API-Football error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  
   /search-fixtures:
     get:
       summary: Search matches by team name

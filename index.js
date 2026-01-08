@@ -156,21 +156,39 @@ const searchFixturesHandler = async (req, res) => {
     }
 
     // Cache miss ou stale: buscar da API
-    const result = await searchFixturesByTeam(team1, {
-      team2: team2 || null,
-      from: from || null,
-      to: to || null,
-      season: season ? Number(season) : null,
-      league: league ? Number(league) : null
-    });
+    let result;
+    try {
+      result = await searchFixturesByTeam(team1, {
+        team2: team2 || null,
+        from: from || null,
+        to: to || null,
+        season: season ? Number(season) : null,
+        league: league ? Number(league) : null
+      });
+    } catch (apiErr) {
+      // Erro da API externa - retornar 502
+      if (apiErr.name === "API_FOOTBALL_ERROR" || apiErr.name === "API_FOOTBALL_HTTP_ERROR" || 
+          apiErr.name === "API_FOOTBALL_TIMEOUT" || apiErr.name === "API_FOOTBALL_REQUEST_ERROR") {
+        return res.status(502).json({
+          error: "API_FOOTBALL_ERROR",
+          message: apiErr.message || "Error fetching data from API-Football",
+          details: apiErr.details || apiErr.statusText || apiErr.message,
+          request: {
+            endpoint: apiErr.endpoint || "/teams",
+            params: apiErr.params || { search: team1 }
+          },
+          cache: cacheMeta
+        });
+      }
+      // Re-lançar outros erros
+      throw apiErr;
+    }
 
-    // Se houver erro na busca, retornar 502 se for erro da API externa
-    if (result.error === "SEARCH_FAILED") {
-      return res.status(502).json({
-        error: "API_FOOTBALL_ERROR",
-        message: "Error fetching data from API-Football",
-        details: result.message,
-        fixtures: [],
+    // Se houver erro na busca (ex: TEAM_NOT_FOUND), retornar normalmente (já é um objeto de erro)
+    if (result.error === "SEARCH_FAILED" || result.error === "TEAM_NOT_FOUND") {
+      // TEAM_NOT_FOUND retorna 200 com error field (não é erro da API externa)
+      return res.json({
+        ...result,
         cache: cacheMeta
       });
     }
@@ -197,6 +215,20 @@ const searchFixturesHandler = async (req, res) => {
     });
   } catch (err) {
     console.error("SEARCH_FIXTURES_ERROR:", err);
+    
+    // Se for erro da API externa que não foi capturado, retornar 502
+    if (err.name && err.name.startsWith("API_FOOTBALL_")) {
+      return res.status(502).json({
+        error: "API_FOOTBALL_ERROR",
+        message: err.message || "Error fetching data from API-Football",
+        details: err.details || err.message,
+        request: {
+          endpoint: err.endpoint || "/teams",
+          params: err.params || {}
+        }
+      });
+    }
+    
     return res.status(500).json({
       error: "SEARCH_FIXTURES_FAILED",
       message: err.message || "Internal error processing search"
@@ -205,6 +237,220 @@ const searchFixturesHandler = async (req, res) => {
 };
 app.get("/search-fixtures", searchFixturesHandler);
 app.get("/buscar-fixtures", searchFixturesHandler); // ✅ Alias
+
+// =================================================
+// 🔹 DEBUG ENDPOINTS (TEMPORÁRIO - REMOVER EM PRODUÇÃO)
+// =================================================
+
+// GET /debug-team-search?name=Arsenal
+app.get("/debug-team-search", async (req, res) => {
+  try {
+    const { name } = req.query;
+    
+    if (!name) {
+      return res.status(400).json({
+        error: "NAME_REQUIRED",
+        message: "Parameter 'name' is required",
+        example: "/debug-team-search?name=Arsenal"
+      });
+    }
+
+    const endpoint = "/teams";
+    const params = { search: name };
+    const endpointDisplay = `${endpoint}?search=${encodeURIComponent(name)}`;
+    
+    const API_KEY = "99a0cbe06e8fbf2655f6cf562748f0c0";
+    const API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io";
+    const url = new URL(`${API_FOOTBALL_BASE_URL}${endpoint}`);
+    url.searchParams.append("search", name);
+
+    let apiStatus = null;
+    let apiErrors = null;
+    let rawCount = 0;
+    let sample = [];
+    let normalizedPick = null;
+
+    try {
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          "x-apisports-key": API_KEY
+        }
+      });
+
+      apiStatus = response.status;
+      const data = await response.json();
+
+      // Verificar erros da API
+      if (data.errors && Object.keys(data.errors).length > 0) {
+        apiErrors = data.errors;
+      }
+
+      // Extrair response
+      const apiResponse = data.response || [];
+      rawCount = apiResponse.length;
+
+      // Sample dos primeiros 3 itens
+      if (apiResponse.length > 0) {
+        sample = apiResponse.slice(0, 3).map(item => ({
+          id: item.team?.id || null,
+          name: item.team?.name || null
+        }));
+
+        // Normalized pick (primeiro resultado)
+        normalizedPick = apiResponse[0].team?.id || null;
+      }
+
+      return res.json({
+        request: {
+          endpoint: endpointDisplay,
+          params: params
+        },
+        api_status: apiStatus,
+        api_errors: apiErrors,
+        raw_count: rawCount,
+        sample: sample,
+        normalized_pick: normalizedPick
+      });
+
+    } catch (fetchErr) {
+      return res.status(502).json({
+        request: {
+          endpoint: endpointDisplay,
+          params: params
+        },
+        api_status: apiStatus,
+        api_errors: apiErrors,
+        raw_count: rawCount,
+        sample: sample,
+        normalized_pick: normalizedPick,
+        error: "REQUEST_FAILED",
+        message: fetchErr.message || "Failed to make request to API-Football"
+      });
+    }
+  } catch (err) {
+    console.error("DEBUG_TEAM_SEARCH_ERROR:", err);
+    return res.status(500).json({
+      error: "DEBUG_TEAM_SEARCH_FAILED",
+      message: err.message || "Internal error"
+    });
+  }
+});
+
+// GET /debug-fixture?id=1379169
+app.get("/debug-fixture", async (req, res) => {
+  try {
+    const { id } = req.query;
+    
+    if (!id) {
+      return res.status(400).json({
+        error: "ID_REQUIRED",
+        message: "Parameter 'id' is required (fixture ID)",
+        example: "/debug-fixture?id=1379169"
+      });
+    }
+
+    const fixtureId = Number(id);
+    if (isNaN(fixtureId) || fixtureId <= 0) {
+      return res.status(400).json({
+        error: "INVALID_FIXTURE_ID",
+        message: "Parameter 'id' must be a valid number greater than zero",
+        received: id
+      });
+    }
+
+    const endpoint = "/fixtures";
+    const params = { id: fixtureId };
+    const endpointDisplay = `${endpoint}?id=${fixtureId}`;
+    
+    const API_KEY = "99a0cbe06e8fbf2655f6cf562748f0c0";
+    const API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io";
+    const url = new URL(`${API_FOOTBALL_BASE_URL}${endpoint}`);
+    url.searchParams.append("id", fixtureId);
+
+    let apiStatus = null;
+    let apiErrors = null;
+    let hasResponse = false;
+    let fixtureSummary = null;
+
+    try {
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          "x-apisports-key": API_KEY
+        }
+      });
+
+      apiStatus = response.status;
+      const data = await response.json();
+
+      // Verificar erros da API
+      if (data.errors && Object.keys(data.errors).length > 0) {
+        apiErrors = data.errors;
+      }
+
+      // Verificar se tem response
+      const apiResponse = data.response || [];
+      hasResponse = apiResponse.length > 0;
+
+      // Resumo do fixture
+      if (hasResponse && apiResponse[0]) {
+        const f = apiResponse[0];
+        fixtureSummary = {
+          id: f.fixture?.id || null,
+          date: f.fixture?.date || null,
+          status: f.fixture?.status?.short || null,
+          league: {
+            id: f.league?.id || null,
+            name: f.league?.name || null,
+            season: f.league?.season || null
+          },
+          teams: {
+            home: {
+              id: f.teams?.home?.id || null,
+              name: f.teams?.home?.name || null
+            },
+            away: {
+              id: f.teams?.away?.id || null,
+              name: f.teams?.away?.name || null
+            }
+          }
+        };
+      }
+
+      return res.json({
+        request: {
+          endpoint: endpointDisplay,
+          params: params
+        },
+        api_status: apiStatus,
+        api_errors: apiErrors,
+        has_response: hasResponse,
+        fixture_summary: fixtureSummary
+      });
+
+    } catch (fetchErr) {
+      return res.status(502).json({
+        request: {
+          endpoint: endpointDisplay,
+          params: params
+        },
+        api_status: apiStatus,
+        api_errors: apiErrors,
+        has_response: hasResponse,
+        fixture_summary: fixtureSummary,
+        error: "REQUEST_FAILED",
+        message: fetchErr.message || "Failed to make request to API-Football"
+      });
+    }
+  } catch (err) {
+    console.error("DEBUG_FIXTURE_ERROR:", err);
+    return res.status(500).json({
+      error: "DEBUG_FIXTURE_FAILED",
+      message: err.message || "Internal error"
+    });
+  }
+});
 
 // =================================================
 // 🔹 DEBUG FIXTURES (TEMPORÁRIO - REMOVER EM PRODUÇÃO)
