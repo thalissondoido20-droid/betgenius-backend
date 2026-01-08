@@ -546,8 +546,14 @@ app.post("/analyze-from-api", async (req, res) => {
 
     console.log(`🔍 Iniciando análise para fixture ${numericFixtureId}...`);
 
-    // 1. Buscar dados completos da API-Football (com cache)
-    let apiData;
+    // 1. Determinar mode e profile para cache key
+    const modeResult = detectMode(question);
+    const finalMode = mode || modeResult.mode || "pre_game";
+    const finalProfile = profile || modeResult.suggested_profile || "technical";
+    
+    // 2. Verificar cache de análise completa (tentar com e sem season_used)
+    const { getAnalysisCache, saveAnalysisCache } = await import("./services/cache-manager.js");
+    
     let cacheMeta = {
       hit: false,
       stale: false,
@@ -557,14 +563,95 @@ app.post("/analyze-from-api", async (req, res) => {
       cached_at: null
     };
     
+    // Tentar buscar cache primeiro sem season (pode ter sido salvo sem season)
+    let analysisCacheResult = await getAnalysisCache({
+      fixture_id: numericFixtureId,
+      mode: finalMode,
+      profile: finalProfile,
+      season_used: null
+    });
+    
+    // Se não encontrou, tentar obter season e buscar novamente
+    let seasonUsed = null;
+    if (!analysisCacheResult.found) {
+      try {
+        const { getFixture } = await import("./services/api-football.js");
+        const fixtures = await getFixture(numericFixtureId);
+        if (fixtures?.[0]) {
+          seasonUsed = fixtures[0].league?.season || null;
+          // Tentar buscar cache com season
+          if (seasonUsed) {
+            analysisCacheResult = await getAnalysisCache({
+              fixture_id: numericFixtureId,
+              mode: finalMode,
+              profile: finalProfile,
+              season_used: seasonUsed
+            });
+          }
+        }
+      } catch (err) {
+        // Ignorar erro, continuar sem season
+        console.warn("⚠️ Não foi possível obter season do fixture");
+      }
+    } else {
+      // Se encontrou cache, extrair season do cache
+      seasonUsed = analysisCacheResult.cache?.season_used || null;
+    }
+    
+    // Se cache encontrado e válido, retornar direto
+    if (analysisCacheResult.found && analysisCacheResult.cache && !analysisCacheResult.stale) {
+      const cached = analysisCacheResult.cache;
+      console.log(`✅ Cache HIT para análise completa (key: ${analysisCacheResult.key})`);
+      
+      cacheMeta = {
+        hit: true,
+        stale: false,
+        revalidated: false,
+        force_revalidate_reason: null,
+        ttl_seconds: analysisCacheResult.ttl_seconds,
+        cached_at: cached.cached_at
+      };
+      
+      return res.json({
+        success: true,
+        mode: cached.mode || finalMode,
+        profile: cached.profile || finalProfile,
+        match: {
+          fixture_id: numericFixtureId,
+          home_team: cached.api_data?.meta?.home_team_name,
+          away_team: cached.api_data?.meta?.away_team_name,
+          league: cached.api_data?.meta?.league_name,
+          date: cached.api_data?.fixture?.fixture?.date
+        },
+        ux: cached.ux,
+        analysis: cached.analysis,
+        completeness: cached.completeness || {},
+        cache: cacheMeta,
+        warnings: undefined,
+        data_summary: {
+          has_statistics: !!cached.api_data?.statistics?.length,
+          has_h2h: !!cached.api_data?.h2h?.length,
+          has_lineups: !!cached.api_data?.lineups?.length,
+          has_standings: !!cached.api_data?.standings?.length
+        }
+      });
+    }
+
+    // 3. Cache miss: buscar dados completos da API-Football (com cache próprio)
+    let apiData;
     try {
       apiData = await getCompleteMatchData(numericFixtureId);
       console.log("✅ Dados da API-Football coletados");
       
-      // Extrair metadados de cache da resposta
+      // Garantir que season_used está atualizado
+      if (!seasonUsed) {
+        seasonUsed = apiData.fixture?.league?.season || null;
+      }
+      
+      // Extrair metadados de cache da resposta (se houver)
       if (apiData.cache_meta) {
-        cacheMeta = apiData.cache_meta;
-        delete apiData.cache_meta; // Remover da resposta (já incluído separadamente)
+        cacheMeta = { ...cacheMeta, ...apiData.cache_meta };
+        delete apiData.cache_meta;
       }
     } catch (apiErr) {
       console.error("❌ Erro na API-Football:", apiErr.message);
@@ -578,9 +665,9 @@ app.post("/analyze-from-api", async (req, res) => {
 
     // Extrair completeness dos dados
     const completeness = apiData.completeness || {};
-    delete apiData.completeness; // Remover da resposta (já incluído separadamente)
+    delete apiData.completeness;
 
-    // 2. Transformar dados para formato do analisar.js
+    // 4. Transformar dados para formato do analisar.js
     let analyzeFormat;
     try {
       analyzeFormat = transformAPIDataToAnalyzeFormat(apiData);
@@ -596,10 +683,7 @@ app.post("/analyze-from-api", async (req, res) => {
       });
     }
 
-    // 3. Analisar com a engine (sempre retorna, mesmo com dados parciais)
-    const modeResult = detectMode(question);
-    const finalProfile = profile || modeResult.suggested_profile || "technical";
-    
+    // 5. Analisar com a engine (sempre retorna, mesmo com dados parciais)
     let analysis;
     let warnings = [];
     
@@ -611,7 +695,7 @@ app.post("/analyze-from-api", async (req, res) => {
       // Coletar warnings da análise
       if (analysis.warnings) {
         warnings = analysis.warnings;
-        delete analysis.warnings; // Remover do objeto analysis (já incluído separadamente)
+        delete analysis.warnings;
       }
     } catch (analyzeErr) {
       // Se ainda assim falhar (erro não esperado), tentar com valores mínimos
@@ -667,26 +751,42 @@ app.post("/analyze-from-api", async (req, res) => {
       }
     }
 
-    // 4. Aplicar profile
+    // 6. Aplicar profile
     const ux = applyProfile({
       profile: finalProfile,
       analysis,
       profileRules,
-      mode,
+      mode: finalMode,
       level: Number(level) || 1
     });
 
-    // 5. Salvar análise e UX no cache (se disponível)
+    // 7. Salvar no cache de análise completa (com chave estável)
     try {
-      const { saveMatchCache } = await import("./services/cache-manager.js");
-      await saveMatchCache(numericFixtureId, apiData, analyzeFormat, analysis);
-      
-      // TODO: Salvar UX cache por profile (opcional, pode ser implementado depois)
+      await saveAnalysisCache({
+        fixture_id: numericFixtureId,
+        mode: finalMode,
+        profile: finalProfile,
+        season_used: seasonUsed,
+        apiData: apiData,
+        analysis: analysis,
+        ux: ux,
+        completeness: completeness,
+        enrichedData: analyzeFormat?.enriched_data || null
+      });
+      console.log("✅ Análise completa salva no cache");
     } catch (cacheErr) {
       console.warn("⚠️ Erro ao salvar análise no cache (continuando):", cacheErr.message);
     }
 
-    // 6. Salvar no MongoDB (não falha a requisição)
+    // 8. Salvar também no cache de match (dados da API)
+    try {
+      const { saveMatchCache } = await import("./services/cache-manager.js");
+      await saveMatchCache(numericFixtureId, apiData, analyzeFormat, analysis);
+    } catch (cacheErr) {
+      console.warn("⚠️ Erro ao salvar match no cache (continuando):", cacheErr.message);
+    }
+
+    // 9. Salvar no MongoDB (não falha a requisição)
     if (save_to_db) {
       try {
         await saveAnalysis(analysis, apiData);
@@ -696,10 +796,30 @@ app.post("/analyze-from-api", async (req, res) => {
       }
     }
 
+    // Atualizar cacheMeta para indicar que foi revalidado
+    cacheMeta.hit = false;
+    cacheMeta.revalidated = true;
+    
+    // Buscar TTL do cache salvo
+    try {
+      const cacheCheck = await getAnalysisCache({
+        fixture_id: numericFixtureId,
+        mode: finalMode,
+        profile: finalProfile,
+        season_used: seasonUsed
+      });
+      if (cacheCheck.found) {
+        cacheMeta.ttl_seconds = cacheCheck.ttl_seconds;
+        cacheMeta.cached_at = cacheCheck.cache.cached_at;
+      }
+    } catch (err) {
+      // Ignorar erro ao buscar TTL
+    }
+
     // ✅ Resposta final estruturada com metadados de cache e warnings
     return res.json({
       success: true,
-      mode: modeResult.mode || "pre_game",
+      mode: finalMode,
       profile: finalProfile,
       match: {
         fixture_id: apiData.meta?.fixture_id || numericFixtureId,

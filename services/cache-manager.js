@@ -136,20 +136,66 @@ export function shouldForceRevalidate({ cached_status, current_status, fixture_d
 
 /**
  * Calcula completeness flags baseado nos dados da API
+ * NÃO pode mentir para baixo - só marca true se dados realmente existirem
  */
-export function computeCompleteness(apiData) {
+export function computeCompleteness(apiData, enrichedData = null) {
+  // has_h2h: verificar se enriched_data.h2h.total_matches > 0 OU se h2h direto tem dados
+  let has_h2h = false;
+  if (enrichedData?.h2h?.total_matches > 0) {
+    // Priorizar enriched_data (já processado)
+    has_h2h = true;
+  } else if (apiData.h2h && Array.isArray(apiData.h2h) && apiData.h2h.length > 0) {
+    // Fallback para dados brutos da API
+    has_h2h = true;
+  }
+  
+  // has_last5: verificar predictions com last_5.played > 0
+  let has_last5 = false;
+  if (enrichedData?.predictions) {
+    const pred = enrichedData.predictions;
+    if (pred.teams?.home?.last_5?.played > 0 && pred.teams?.away?.last_5?.played > 0) {
+      has_last5 = true;
+    }
+  } else if (apiData.predictions && Array.isArray(apiData.predictions) && apiData.predictions.length > 0) {
+    const pred = apiData.predictions[0];
+    if (pred.teams?.home?.last_5?.played > 0 && pred.teams?.away?.last_5?.played > 0) {
+      has_last5 = true;
+    }
+  }
+  
+  // has_statistics: verificar se statistics do fixture foi buscado e retornou dados
+  // statistics é um array de objetos com team statistics
+  const has_statistics = !!(apiData.statistics && Array.isArray(apiData.statistics) && apiData.statistics.length > 0);
+  
+  // has_standings: verificar se standings foi buscado e retornou estrutura válida
+  const has_standings = !!(apiData.standings && Array.isArray(apiData.standings) && apiData.standings.length > 0);
+  
   return {
-    has_lineups: !!(apiData.lineups && apiData.lineups.length > 0),
+    has_lineups: !!(apiData.lineups && Array.isArray(apiData.lineups) && apiData.lineups.length > 0),
     has_injuries: !!(apiData.home_injuries || apiData.away_injuries),
-    has_statistics: !!(apiData.statistics && apiData.statistics.length > 0),
-    has_h2h: !!(apiData.h2h && apiData.h2h.length > 0),
-    has_standings: !!(apiData.standings && apiData.standings.length > 0),
-    has_last5: false // Seria necessário buscar dados de últimos 5 jogos separadamente
+    has_statistics: has_statistics,
+    has_h2h: has_h2h,
+    has_standings: has_standings,
+    has_last5: has_last5
   };
 }
 
 /**
- * Busca cache de match por fixture_id
+ * Gera cache key estável baseada apenas em parâmetros fixos
+ */
+function generateAnalysisCacheKey({ fixture_id, mode, profile, season_used = null }) {
+  const keyParts = [
+    `fixture:${fixture_id}`,
+    `mode:${mode || 'pre_game'}`,
+    `profile:${profile || 'technical'}`,
+    season_used ? `season:${season_used}` : null
+  ].filter(Boolean);
+  
+  return createHash("sha1").update(keyParts.join("|")).digest("hex");
+}
+
+/**
+ * Busca cache de match por fixture_id (dados da API)
  */
 export async function getMatchCache(fixtureId) {
   try {
@@ -179,7 +225,63 @@ export async function getMatchCache(fixtureId) {
 }
 
 /**
- * Salva/atualiza cache de match
+ * Busca cache de análise completa (apiData + analysis + ux)
+ * Tenta buscar com e sem season_used para compatibilidade
+ */
+export async function getAnalysisCache({ fixture_id, mode, profile, season_used = null }) {
+  try {
+    const db = await getDB();
+    const collection = db.collection("analysis_cache");
+    
+    // Tentar primeiro com season_used fornecido
+    let key = generateAnalysisCacheKey({ fixture_id, mode, profile, season_used });
+    let cached = await collection.findOne({ cache_key: key });
+    
+    // Se não encontrou e season_used foi fornecido, tentar sem season (compatibilidade)
+    if (!cached && season_used !== null) {
+      const keyWithoutSeason = generateAnalysisCacheKey({ fixture_id, mode, profile, season_used: null });
+      cached = await collection.findOne({ cache_key: keyWithoutSeason });
+      if (cached) {
+        key = keyWithoutSeason; // Usar a chave que encontrou
+      }
+    }
+    
+    // Se não encontrou e season_used era null, tentar buscar qualquer cache deste fixture/mode/profile
+    if (!cached) {
+      // Buscar qualquer cache que corresponda (pode ter sido salvo com season diferente)
+      cached = await collection.findOne({
+        fixture_id: fixture_id,
+        mode: mode || "pre_game",
+        profile: profile || "technical"
+      });
+      if (cached) {
+        key = cached.cache_key; // Usar a chave encontrada
+      }
+    }
+    
+    if (!cached) {
+      return { found: false, cache: null, key };
+    }
+
+    const now = new Date();
+    const expiresAt = cached.expires_at ? new Date(cached.expires_at) : null;
+    const isStale = expiresAt ? now >= expiresAt : false;
+
+    return {
+      found: true,
+      cache: cached,
+      stale: isStale,
+      ttl_seconds: expiresAt ? Math.max(0, Math.floor((expiresAt - now) / 1000)) : 0,
+      key
+    };
+  } catch (err) {
+    console.error("❌ Erro ao buscar cache de análise:", err.message);
+    return { found: false, cache: null, error: err.message };
+  }
+}
+
+/**
+ * Salva/atualiza cache de match (dados da API apenas)
  */
 export async function saveMatchCache(fixtureId, apiData, analyzeFormat = null, analysis = null) {
   try {
@@ -189,7 +291,9 @@ export async function saveMatchCache(fixtureId, apiData, analyzeFormat = null, a
     const fixture = apiData.fixture;
     const status = fixture?.fixture?.status?.short || "NS";
     const fixtureDate = fixture?.fixture?.date || new Date().toISOString();
-    const completeness = computeCompleteness(apiData);
+    // Usar enriched_data do analyzeFormat se disponível para cálculo mais preciso
+    const enrichedData = analyzeFormat?.enriched_data || null;
+    const completeness = computeCompleteness(apiData, enrichedData);
     const ttlSeconds = computeTTLSeconds({ status, fixture_date: fixtureDate, completeness });
     
     const now = new Date();
@@ -235,6 +339,69 @@ export async function saveMatchCache(fixtureId, apiData, analyzeFormat = null, a
     };
   } catch (err) {
     console.error("❌ Erro ao salvar cache de match:", err.message);
+    return { cached: false, error: err.message };
+  }
+}
+
+/**
+ * Salva cache de análise completa (apiData + analysis + ux)
+ */
+export async function saveAnalysisCache({ fixture_id, mode, profile, season_used = null, apiData, analysis, ux, completeness, enrichedData = null }) {
+  try {
+    const key = generateAnalysisCacheKey({ fixture_id, mode, profile, season_used });
+    const db = await getDB();
+    const collection = db.collection("analysis_cache");
+
+    const fixture = apiData?.fixture;
+    const status = fixture?.fixture?.status?.short || "NS";
+    const fixtureDate = fixture?.fixture?.date || new Date().toISOString();
+    // Recalcular completeness com enrichedData se disponível (mais preciso)
+    const finalCompleteness = enrichedData ? computeCompleteness(apiData, enrichedData) : completeness;
+    const ttlSeconds = computeTTLSeconds({ status, fixture_date: fixtureDate, completeness: finalCompleteness });
+    
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
+    
+    const cacheDoc = {
+      cache_key: key,
+      fixture_id: fixture_id,
+      mode: mode || "pre_game",
+      profile: profile || "technical",
+      season_used: season_used,
+      cached_at: now.toISOString(),
+      expires_at: expiresAt,
+      completeness: finalCompleteness,
+      api_data: apiData,
+      analysis: analysis,
+      ux: ux
+    };
+
+    // Criar/atualizar cache
+    const updateResult = await collection.updateOne(
+      { cache_key: key },
+      { $set: cacheDoc },
+      { upsert: true }
+    );
+
+    // Criar índices se não existirem (idempotente)
+    try {
+      await collection.createIndex({ cache_key: 1 }, { unique: true });
+      await collection.createIndex({ fixture_id: 1, mode: 1, profile: 1 }); // Índice composto para busca alternativa
+      await collection.createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 });
+    } catch (idxErr) {
+      // Índices já existem ou erro não crítico, continuar
+    }
+
+    console.log(`💾 Cache salvo: key=${key.substring(0, 8)}..., fixture=${fixture_id}, mode=${mode}, profile=${profile}, season=${season_used}, ttl=${ttlSeconds}s`);
+
+    return {
+      cached: true,
+      expires_at: expiresAt.toISOString(),
+      ttl_seconds: ttlSeconds,
+      key
+    };
+  } catch (err) {
+    console.error("❌ Erro ao salvar cache de análise:", err.message);
     return { cached: false, error: err.message };
   }
 }
