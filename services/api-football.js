@@ -311,35 +311,50 @@ async function filterByTeam2(fixtures, team2, team2Id = null) {
 }
 
 /**
- * Formata fixture para resposta
+ * Formata fixture para resposta (100% inglês, contrato estável)
  */
 function formatFixture(f) {
+  // Venue pode ser string (nome) ou objeto (name, city)
+  let venue = null;
+  if (f.fixture.venue) {
+    if (f.fixture.venue.name || f.fixture.venue.city) {
+      venue = {
+        name: f.fixture.venue.name || null,
+        city: f.fixture.venue.city || null
+      };
+      // Se só tem name, pode retornar como string para compatibilidade
+      if (!venue.city && venue.name) {
+        venue = venue.name;
+      }
+    }
+  }
+
   return {
     fixture_id: f.fixture.id,
     date: f.fixture.date,
     status: f.fixture.status?.short || "NS", // Sempre usar código curto (NS/FT/etc)
     league: {
       id: f.league.id,
-      name: f.league.name,
+      name: f.league.name, // Nome original da API (inglês)
       season: f.league.season
     },
     teams: {
       home: {
         id: f.teams.home.id,
-        name: f.teams.home.name,
-        logo: f.teams.home.logo
+        name: f.teams.home.name, // Nome original da API (inglês)
+        logo: f.teams.home.logo || null
       },
       away: {
         id: f.teams.away.id,
-        name: f.teams.away.name,
-        logo: f.teams.away.logo
+        name: f.teams.away.name, // Nome original da API (inglês)
+        logo: f.teams.away.logo || null
       }
     },
     score: f.goals ? {
       home: f.goals.home,
       away: f.goals.away
     } : null,
-    venue: f.fixture.venue?.name || null
+    venue: venue
   };
 }
 

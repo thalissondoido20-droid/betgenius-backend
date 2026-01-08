@@ -692,6 +692,119 @@ app.get("/debug-fixtures", async (req, res) => {
 });
 
 // =================================================
+// 🔹 CONTRACT CHECK (INTERNO - DEBUG)
+// =================================================
+app.get("/_contract-check", async (req, res) => {
+  // Proteger por env flag
+  if (process.env.INTERNAL_DEBUG !== "true") {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+
+  try {
+    const { name } = req.query;
+    
+    if (!name) {
+      return res.status(400).json({
+        error: "NAME_REQUIRED",
+        message: "Parameter 'name' is required",
+        available: ["search-fixtures", "analyze-from-api", "debug-team-search", "debug-fixture"],
+        example: "/_contract-check?name=search-fixtures"
+      });
+    }
+
+    const { validateContract, detectPortugueseFields } = await import("./utils/contract-validator.js");
+    
+    // Para teste, criar um payload de exemplo
+    let samplePayload = {};
+    
+    if (name === "search-fixtures") {
+      samplePayload = {
+        team_searched: "Arsenal",
+        team_id: 42,
+        team2_filter: null,
+        date_range: { from: "2026-01-06", to: "2026-01-10" },
+        season_used: 2025,
+        total_found: 1,
+        fixtures: [{
+          fixture_id: 1379169,
+          date: "2026-01-08T20:00:00+00:00",
+          status: "NS",
+          league: { id: 39, name: "Premier League", season: 2025 },
+          teams: {
+            home: { id: 42, name: "Arsenal", logo: "https://..." },
+            away: { id: 40, name: "Liverpool", logo: "https://..." }
+          },
+          score: { home: null, away: null },
+          venue: "Emirates Stadium"
+        }],
+        integrity_check: { ran: false },
+        cache: { hit: false }
+      };
+    } else if (name === "analyze-from-api") {
+      samplePayload = {
+        success: true,
+        mode: "pre_game",
+        profile: "technical",
+        match: {
+          fixture_id: 1379169,
+          home_team: "Arsenal",
+          away_team: "Liverpool",
+          league: "Premier League",
+          date: "2026-01-08T20:00:00+00:00"
+        },
+        ux: {},
+        analysis: {
+          meta: { insufficient_data: false },
+          debug_factors: {
+            inputs: {
+              home: { matches_used: 5, goals_for_avg: 1.5 },
+              away: { matches_used: 5, goals_for_avg: 1.2 }
+            }
+          }
+        },
+        completeness: {
+          has_lineups: false,
+          has_injuries: false,
+          has_statistics: false,
+          has_h2h: true,
+          has_standings: true,
+          has_last5: true
+        },
+        cache: { hit: false },
+        warnings: []
+      };
+    } else {
+      return res.status(400).json({
+        error: "INVALID_SCHEMA_NAME",
+        message: `Schema "${name}" não encontrado`,
+        available: ["search-fixtures", "analyze-from-api", "debug-team-search", "debug-fixture"]
+      });
+    }
+
+    const validation = validateContract(name === "search-fixtures" ? "searchFixturesResponse" : 
+                                       name === "analyze-from-api" ? "analyzeResponseV2" : name, samplePayload);
+    const portugueseFields = detectPortugueseFields(samplePayload);
+
+    return res.json({
+      ok: validation.valid && portugueseFields.length === 0,
+      schema: name,
+      validation: {
+        valid: validation.valid,
+        issues: validation.issues || []
+      },
+      portuguese_fields_detected: portugueseFields,
+      sample_payload_keys: Object.keys(samplePayload)
+    });
+  } catch (err) {
+    console.error("CONTRACT_CHECK_ERROR:", err);
+    return res.status(500).json({
+      error: "CONTRACT_CHECK_FAILED",
+      message: err.message || "Internal error"
+    });
+  }
+});
+
+// =================================================
 // 🔹 POST-GAME ROUND (CONTEÚDO PÓS-JOGO)
 // =================================================
 app.post("/postgame-round", async (req, res) => {
@@ -858,7 +971,7 @@ app.post("/analyze-from-api", async (req, res) => {
         cached_at: cached.cached_at
       };
       
-      return res.json({
+      const cachedResponse = {
         success: true,
         mode: cached.mode || finalMode,
         profile: cached.profile || finalProfile,
@@ -880,7 +993,22 @@ app.post("/analyze-from-api", async (req, res) => {
           has_lineups: !!cached.api_data?.lineups?.length,
           has_standings: !!cached.api_data?.standings?.length
         }
-      });
+      };
+
+      // Validar contrato em DEV
+      if (process.env.NODE_ENV !== "production") {
+        try {
+          const { validateAndLog } = await import("./utils/contract-validator.js");
+          const validation = validateAndLog("analyzeResponseV2", cachedResponse, false);
+          if (!validation.valid) {
+            console.error("⚠️ CONTRACT_VALIDATION_FAILED em /analyze-from-api (cache hit)");
+          }
+        } catch (validationErr) {
+          console.warn("⚠️ Erro ao validar contrato:", validationErr.message);
+        }
+      }
+
+      return res.json(cachedResponse);
     }
 
     // 3. Cache miss: buscar dados completos da API-Football (com cache próprio)
@@ -905,6 +1033,7 @@ app.post("/analyze-from-api", async (req, res) => {
         error: "FIXTURE_NOT_FOUND",
         message: `Could not find match with ID ${numericFixtureId}`,
         details: apiErr.message,
+        request_id: req.headers["x-request-id"] || `req_${Date.now()}`,
         cache: cacheMeta
       });
     }
@@ -916,7 +1045,7 @@ app.post("/analyze-from-api", async (req, res) => {
     // 4. Transformar dados para formato do analisar.js
     let analyzeFormat;
     try {
-      analyzeFormat = transformAPIDataToAnalyzeFormat(apiData);
+      analyzeFormat = await transformAPIDataToAnalyzeFormat(apiData);
       console.log("✅ Dados transformados para formato de análise");
     } catch (transformErr) {
       console.error("❌ Erro na transformação:", transformErr.message);
@@ -1063,7 +1192,7 @@ app.post("/analyze-from-api", async (req, res) => {
     }
 
     // ✅ Resposta final estruturada com metadados de cache e warnings
-    return res.json({
+    const response = {
       success: true,
       mode: finalMode,
       profile: finalProfile,
@@ -1085,7 +1214,31 @@ app.post("/analyze-from-api", async (req, res) => {
         has_lineups: !!apiData.lineups?.length,
         has_standings: !!apiData.standings?.length
       }
-    });
+    };
+
+    // Validar contrato em DEV
+    if (process.env.NODE_ENV !== "production") {
+      try {
+        const { validateAndLog } = await import("./utils/contract-validator.js");
+        const validation = validateAndLog("analyzeResponseV2", response, false);
+        if (!validation.valid) {
+          console.error("⚠️ CONTRACT_VALIDATION_FAILED em /analyze-from-api");
+          // Em DEV, retornar 500 com detalhes (em PROD seria genérico)
+          if (validation.error) {
+            return res.status(500).json({
+              error: "CONTRACT_VALIDATION_FAILED",
+              message: validation.error.message,
+              details: validation.error
+            });
+          }
+        }
+      } catch (validationErr) {
+        // Não falhar requisição por erro de validação
+        console.warn("⚠️ Erro ao validar contrato:", validationErr.message);
+      }
+    }
+
+    return res.json(response);
   } catch (err) {
     console.error("ERRO_ANALYZE_FROM_API:", err);
     

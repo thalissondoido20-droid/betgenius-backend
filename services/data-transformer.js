@@ -337,18 +337,214 @@ function extractScheduleContext(fixture, homeTeamStats, awayTeamStats) {
 }
 
 /**
+ * Busca últimos N jogos de um time na liga para calcular médias (fallback quando statistics não disponível)
+ */
+async function fetchLastMatchesForStats(teamId, leagueId, season, minMatches = 5) {
+  try {
+    const { getFixtures, getFixtureStatistics } = await import("./api-football.js");
+    
+    // Buscar últimos jogos do time na liga (apenas jogos finalizados)
+    const now = new Date();
+    const sixMonthsAgo = new Date(now);
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    
+    const fixtures = await getFixtures({
+      team: teamId,
+      league: leagueId,
+      season: season,
+      status: "FT", // Apenas jogos finalizados
+      from: formatDate(sixMonthsAgo),
+      to: formatDate(now)
+    });
+    
+    if (!fixtures || fixtures.length === 0) {
+      return null;
+    }
+    
+    // Ordenar por data (mais recente primeiro) e pegar últimos N
+    const recentFixtures = fixtures
+      .filter(f => f.fixture?.status?.short === "FT")
+      .sort((a, b) => new Date(b.fixture.date) - new Date(a.fixture.date))
+      .slice(0, 15); // Buscar 15 para garantir que temos pelo menos 5 com stats
+    
+    // Buscar statistics dos últimos fixtures (em paralelo, mas limitado)
+    const fixturesWithStats = [];
+    for (const fixture of recentFixtures.slice(0, 10)) { // Limitar a 10 para não exceder rate limit
+      try {
+        const stats = await getFixtureStatistics(fixture.fixture.id);
+        if (stats && stats.length > 0) {
+          fixturesWithStats.push({
+            ...fixture,
+            statistics: stats
+          });
+          if (fixturesWithStats.length >= minMatches) break;
+        }
+      } catch (err) {
+        // Continuar se não conseguir stats de um jogo
+        continue;
+      }
+    }
+    
+    return fixturesWithStats.length >= minMatches ? fixturesWithStats : 
+           (fixturesWithStats.length > 0 ? fixturesWithStats : null);
+  } catch (err) {
+    console.warn(`⚠️ Erro ao buscar últimos jogos para stats (team ${teamId}):`, err.message);
+    return null;
+  }
+}
+
+function formatDate(date) {
+  const d = new Date(date);
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Calcula stats a partir dos últimos jogos (fixtures com goals)
+ * Usa goals dos fixtures diretamente (disponível) e tenta extrair outras stats se disponíveis
+ */
+function calculateStatsFromMatches(matches, teamId) {
+  if (!matches || matches.length === 0) {
+    return null;
+  }
+  
+  const goalsFor = [];
+  const goalsAgainst = [];
+  const corners = [];
+  const yellowCards = [];
+  const fouls = [];
+  const shots = [];
+  const possession = [];
+  
+  matches.forEach(match => {
+    // Determinar qual time corresponde ao teamId
+    const isHomeTeam = match.teams?.home?.id === teamId;
+    
+    // Extrair goals diretamente dos fixtures (sempre disponível)
+    const teamGoals = isHomeTeam ? (match.goals?.home ?? 0) : (match.goals?.away ?? 0);
+    const oppGoals = isHomeTeam ? (match.goals?.away ?? 0) : (match.goals?.home ?? 0);
+    
+    if (teamGoals !== null && teamGoals !== undefined) {
+      goalsFor.push(parseInt(teamGoals) || 0);
+    }
+    if (oppGoals !== null && oppGoals !== undefined) {
+      goalsAgainst.push(parseInt(oppGoals) || 0);
+    }
+    
+    // Tentar extrair outras stats se statistics estiver disponível
+    if (match.statistics && Array.isArray(match.statistics) && match.statistics.length >= 2) {
+      const teamIndex = isHomeTeam ? 0 : 1;
+      const oppIndex = isHomeTeam ? 1 : 0;
+      const teamStats = match.statistics[teamIndex];
+      const oppStats = match.statistics[oppIndex];
+      
+      if (teamStats && teamStats.statistics) {
+        const statsMap = {};
+        teamStats.statistics.forEach(s => {
+          statsMap[s.type] = s.value;
+        });
+        
+        const cornersValue = statsMap["Corner Kicks"];
+        const cardsValue = statsMap["Yellow Cards"];
+        const foulsValue = statsMap["Fouls"];
+        const shotsValue = statsMap["Total Shots"];
+        const possValue = statsMap["Ball Possession"];
+        
+        if (cornersValue !== undefined && cornersValue !== null) {
+          corners.push(parseInt(cornersValue) || 0);
+        }
+        if (cardsValue !== undefined && cardsValue !== null) {
+          yellowCards.push(parseInt(cardsValue) || 0);
+        }
+        if (foulsValue !== undefined && foulsValue !== null) {
+          fouls.push(parseInt(foulsValue) || 0);
+        }
+        if (shotsValue !== undefined && shotsValue !== null) {
+          shots.push(parseInt(shotsValue) || 0);
+        }
+        if (possValue !== undefined && possValue !== null) {
+          const possNum = typeof possValue === "string" ? parseFloat(possValue.replace("%", "")) : possValue;
+          if (!isNaN(possNum)) possession.push(possNum);
+        }
+      }
+    }
+  });
+  
+  // Se não temos goals, não podemos calcular stats
+  if (goalsFor.length === 0) {
+    return null;
+  }
+  
+  return {
+    matches_used: matches.length,
+    goals_for_avg: calculateAverage(goalsFor),
+    goals_against_avg: calculateAverage(goalsAgainst),
+    corners_for_avg: corners.length > 0 ? calculateAverage(corners) : 0,
+    yellow_cards_avg: yellowCards.length > 0 ? calculateAverage(yellowCards) : 0,
+    fouls_avg: fouls.length > 0 ? calculateAverage(fouls) : 0,
+    shots_total_avg: shots.length > 0 ? calculateAverage(shots) : 0,
+    possession_avg: possession.length > 0 ? calculateAverage(possession) : 50,
+    has_statistics: matches.length >= 5 && goalsFor.length >= 5
+  };
+}
+
+/**
  * Transforma dados completos da API-Football para formato do analisar.js
  */
-export function transformAPIDataToAnalyzeFormat(apiData) {
+export async function transformAPIDataToAnalyzeFormat(apiData) {
   const { fixture, home_team_stats, away_team_stats, home_players, away_players, h2h, lineups, standings } = apiData;
 
   if (!fixture) {
     throw new Error("Fixture data is required");
   }
 
-  // Extrair estatísticas dos times (agora tolerante a dados ausentes)
+  // Extrair estatísticas dos times
   let homeStats = extractTeamStats(home_team_stats, true);
   let awayStats = extractTeamStats(away_team_stats, false);
+
+  // Se não há statistics disponíveis E o jogo é futuro (NS), buscar últimos jogos como fallback
+  const fixtureStatus = fixture.fixture?.status?.short || "NS";
+  const isFutureMatch = fixtureStatus === "NS" || fixtureStatus === "TBD";
+  
+  const homeTeamId = fixture.teams?.home?.id;
+  const awayTeamId = fixture.teams?.away?.id;
+  const leagueId = fixture.league?.id;
+  const season = fixture.league?.season;
+  
+  // Se não há stats e é jogo futuro, buscar últimos jogos
+  if (isFutureMatch && (!homeStats?.has_statistics || (homeStats.matches_used || 0) < 5) && homeTeamId && leagueId && season) {
+    console.log(`📊 Buscando últimos jogos para home team ${homeTeamId} (fallback para stats)...`);
+    try {
+      const lastMatches = await fetchLastMatchesForStats(homeTeamId, leagueId, season, 5);
+      if (lastMatches && lastMatches.length >= 5) {
+        const calculatedStats = calculateStatsFromMatches(lastMatches, homeTeamId);
+        if (calculatedStats && calculatedStats.matches_used >= 5) {
+          homeStats = { ...homeStats, ...calculatedStats, corners_against_avg: 0 }; // Será calculado depois
+          console.log(`✅ Stats calculados para home team: ${calculatedStats.matches_used} jogos, ${calculatedStats.goals_for_avg.toFixed(2)} gols/avg`);
+        }
+      }
+    } catch (err) {
+      console.warn(`⚠️ Erro ao buscar últimos jogos para home team:`, err.message);
+    }
+  }
+  
+  if (isFutureMatch && (!awayStats?.has_statistics || (awayStats.matches_used || 0) < 5) && awayTeamId && leagueId && season) {
+    console.log(`📊 Buscando últimos jogos para away team ${awayTeamId} (fallback para stats)...`);
+    try {
+      const lastMatches = await fetchLastMatchesForStats(awayTeamId, leagueId, season, 5);
+      if (lastMatches && lastMatches.length >= 5) {
+        const calculatedStats = calculateStatsFromMatches(lastMatches, awayTeamId);
+        if (calculatedStats && calculatedStats.matches_used >= 5) {
+          awayStats = { ...awayStats, ...calculatedStats, corners_against_avg: 0 }; // Será calculado depois
+          console.log(`✅ Stats calculados para away team: ${calculatedStats.matches_used} jogos, ${calculatedStats.goals_for_avg.toFixed(2)} gols/avg`);
+        }
+      }
+    } catch (err) {
+      console.warn(`⚠️ Erro ao buscar últimos jogos para away team:`, err.message);
+    }
+  }
 
   // Garantir que sempre tenham estrutura válida
   const defaultStats = {
@@ -368,7 +564,8 @@ export function transformAPIDataToAnalyzeFormat(apiData) {
   if (!awayStats) awayStats = defaultStats;
 
   // Não falhar se não houver estatísticas - retornar com flags meta
-  const hasStatistics = (homeStats?.has_statistics && awayStats?.has_statistics) || false;
+  const hasStatistics = (homeStats?.has_statistics || homeStats?.matches_used >= 5) && 
+                        (awayStats?.has_statistics || awayStats?.matches_used >= 5);
 
   // Calcular corners_against baseado no oponente
   homeStats.corners_against_avg = awayStats.corners_for_avg;

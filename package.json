@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test:contracts": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/contracts.test.js"
   },
   "engines": {
     "node": "18.x"

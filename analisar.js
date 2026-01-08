@@ -304,16 +304,15 @@ async function performAnalysis({ match, league_context, schedule_context, refere
     },
 
     markets: {
-      goals: buildMarketReadingGoals(home, away, league_context, goals_strength),
-      corners: buildMarketReadingCorners(home, away, league_context, corners_strength),
-      cards: buildMarketReadingCards(
-        home,
-        away,
-        league_context,
-        referee_context,
-        schedule_context,
-        cards_strength
-      )
+      goals: goals_strength !== null && goals_strength !== undefined
+        ? buildMarketReadingGoals(home, away, league_context, goals_strength)
+        : { trend: "insufficient_data", comparison_to_league: null, strength: null, drivers: [] },
+      corners: corners_strength !== null && corners_strength !== undefined
+        ? buildMarketReadingCorners(home, away, league_context, corners_strength)
+        : { trend: "insufficient_data", comparison_to_league: null, strength: null, drivers: [] },
+      cards: cards_strength !== null && cards_strength !== undefined
+        ? buildMarketReadingCards(home, away, league_context, referee_context, schedule_context, cards_strength)
+        : { trend: "insufficient_data", strength: null, referee_bias: null, drivers: [] }
     },
 
     game_profile: {
@@ -351,13 +350,34 @@ async function performAnalysis({ match, league_context, schedule_context, refere
   // =================================================
   const debug_factors = {
     inputs: {
-      matches_used: { home: home.matches_used, away: away.matches_used }
+      home: {
+        matches_used: home.matches_used || 0,
+        goals_for_avg: home.goals_for_avg || 0,
+        goals_against_avg: home.goals_against_avg || 0,
+        corners_for_avg: home.corners_for_avg || 0,
+        corners_against_avg: home.corners_against_avg || 0,
+        yellow_cards_avg: home.yellow_cards_avg || 0,
+        fouls_avg: home.fouls_avg || 0
+      },
+      away: {
+        matches_used: away.matches_used || 0,
+        goals_for_avg: away.goals_for_avg || 0,
+        goals_against_avg: away.goals_against_avg || 0,
+        corners_for_avg: away.corners_for_avg || 0,
+        corners_against_avg: away.corners_against_avg || 0,
+        yellow_cards_avg: away.yellow_cards_avg || 0,
+        fouls_avg: away.fouls_avg || 0
+      }
     },
     goals: goals_debug,
     corners: corners_debug,
     cards: cards_debug,
     outcome: outcome_probabilities._debug
   };
+
+  // Verificar se há dados insuficientes
+  const insufficientData = (home.matches_used < 5 || away.matches_used < 5) ||
+                          !home.goals_for_avg || !away.goals_for_avg;
 
   // =================================================
   // ✅ RETORNO FINAL (COMPATÍVEL + PREMIUM)
@@ -370,6 +390,7 @@ async function performAnalysis({ match, league_context, schedule_context, refere
       away_team: match.away_team,
       referee: referee_context.name || "Não informado",
       real_data_only: true,
+      insufficient_data: insufficientData,
       fixture_id: match.fixture_id || null,
       date: match.date || null,
       venue: match.venue || null
@@ -395,16 +416,34 @@ async function performAnalysis({ match, league_context, schedule_context, refere
 // OUTCOME (compatível)
 // =========================
 function calculateOutcomeProbabilities({ home, away, league_context, schedule_context }) {
+  // Verificar se há dados suficientes
+  const hasEnoughData = (home.matches_used >= 5 && away.matches_used >= 5) &&
+                        (home.goals_for_avg > 0 || away.goals_for_avg > 0);
+  
+  if (!hasEnoughData) {
+    // Retornar distribuição neutra quando não há dados
+    return {
+      home_win: 0.33,
+      draw: 0.34,
+      away_win: 0.33,
+      confidence: "low",
+      _debug: {
+        insufficient_data: true,
+        message: "Insufficient match data for outcome probabilities"
+      }
+    };
+  }
+
   let home_score =
-    home.goals_for_avg +
-    home.possession_avg / 50 -
-    home.goals_against_avg -
+    (home.goals_for_avg || 0) +
+    ((home.possession_avg || 50) / 50) -
+    (home.goals_against_avg || 0) -
     schedule_context.home_congestion_index;
 
   let away_score =
-    away.goals_for_avg +
-    away.possession_avg / 50 -
-    away.goals_against_avg -
+    (away.goals_for_avg || 0) +
+    ((away.possession_avg || 50) / 50) -
+    (away.goals_against_avg || 0) -
     schedule_context.away_congestion_index;
 
   let draw_score =
@@ -447,6 +486,23 @@ function calculateOutcomeProbabilities({ home, away, league_context, schedule_co
 // GOALS
 // =========================
 function analyzeGoals(home, away, league) {
+  // Verificar se há dados suficientes (matches_used >= 5)
+  const hasEnoughData = (home.matches_used >= 5 && away.matches_used >= 5) &&
+                        (home.goals_for_avg > 0 || away.goals_for_avg > 0);
+  
+  if (!hasEnoughData) {
+    return {
+      goals_block: null,
+      goals_strength: null,
+      goals_debug: {
+        insufficient_data: true,
+        home_matches_used: home.matches_used || 0,
+        away_matches_used: away.matches_used || 0,
+        message: "Insufficient match data for goals analysis"
+      }
+    };
+  }
+
   let strength = 0;
 
   const home_attack_vs_away_def = (home.goals_for_avg + away.goals_against_avg) / 2;
@@ -488,6 +544,23 @@ function analyzeGoals(home, away, league) {
 // CORNERS
 // =========================
 function analyzeCorners(home, away, league) {
+  // Verificar se há dados suficientes
+  const hasEnoughData = (home.matches_used >= 5 && away.matches_used >= 5) &&
+                        ((home.corners_for_avg > 0 || away.corners_for_avg > 0));
+  
+  if (!hasEnoughData) {
+    return {
+      corners_block: null,
+      corners_strength: null,
+      corners_debug: {
+        insufficient_data: true,
+        home_matches_used: home.matches_used || 0,
+        away_matches_used: away.matches_used || 0,
+        message: "Insufficient match data for corners analysis"
+      }
+    };
+  }
+
   let strength = 0;
 
   const combined_for = (home.corners_for_avg + away.corners_for_avg) / 2;
@@ -529,6 +602,23 @@ function analyzeCorners(home, away, league) {
 // CARDS
 // =========================
 function analyzeCards(home, away, league, referee, schedule, match) {
+  // Verificar se há dados suficientes
+  const hasEnoughData = (home.matches_used >= 5 && away.matches_used >= 5) &&
+                        ((home.yellow_cards_avg > 0 || away.yellow_cards_avg > 0));
+  
+  if (!hasEnoughData) {
+    return {
+      cards_block: null,
+      cards_strength: null,
+      cards_debug: {
+        insufficient_data: true,
+        home_matches_used: home.matches_used || 0,
+        away_matches_used: away.matches_used || 0,
+        message: "Insufficient match data for cards analysis"
+      }
+    };
+  }
+
   let strength = 0;
 
   const teams_cards_avg = (home.yellow_cards_avg + away.yellow_cards_avg) / 2;
@@ -586,6 +676,16 @@ function analyzeCards(home, away, league, referee, schedule, match) {
 // PREMIUM READINGS (sem odds)
 // =========================
 function buildMarketReadingGoals(home, away, league, strength) {
+  // Verificar dados suficientes
+  if (strength === null || strength === undefined || home.matches_used < 5 || away.matches_used < 5) {
+    return {
+      trend: "insufficient_data",
+      comparison_to_league: null,
+      strength: null,
+      drivers: []
+    };
+  }
+  
   const combined_for = (home.goals_for_avg + away.goals_for_avg) / 2;
   return {
     trend: combined_for > league.avg_goals ? "above_average" : "below_average",
@@ -596,6 +696,16 @@ function buildMarketReadingGoals(home, away, league, strength) {
 }
 
 function buildMarketReadingCorners(home, away, league, strength) {
+  // Verificar dados suficientes
+  if (strength === null || strength === undefined || home.matches_used < 5 || away.matches_used < 5) {
+    return {
+      trend: "insufficient_data",
+      comparison_to_league: null,
+      strength: null,
+      drivers: []
+    };
+  }
+  
   const combined_for = (home.corners_for_avg + away.corners_for_avg) / 2;
   return {
     trend: combined_for > league.avg_corners ? "high_volume" : "low_volume",
@@ -606,6 +716,16 @@ function buildMarketReadingCorners(home, away, league, strength) {
 }
 
 function buildMarketReadingCards(home, away, league, referee, schedule, strength) {
+  // Verificar dados suficientes
+  if (strength === null || strength === undefined || home.matches_used < 5 || away.matches_used < 5) {
+    return {
+      trend: "insufficient_data",
+      strength: null,
+      referee_bias: null,
+      drivers: []
+    };
+  }
+  
   const combined_cards = (home.yellow_cards_avg + away.yellow_cards_avg) / 2;
   const away_pressure = schedule.away_congestion_index + (schedule.away_travel_km > 800 ? 0.2 : 0);
 
