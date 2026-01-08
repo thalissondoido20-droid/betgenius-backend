@@ -47,12 +47,17 @@ function recordAPICall() {
 
 /**
  * Calcula TTL em segundos baseado em status e tempo até o jogo
+ * Ajusta TTL quando dados estão incompletos próximo do kickoff
  */
 export function computeTTLSeconds({ status, fixture_date, completeness = {} }) {
   const now = new Date();
   const fixtureDate = new Date(fixture_date);
   const timeUntilMatch = fixtureDate - now;
   const hoursUntilMatch = timeUntilMatch / (1000 * 60 * 60);
+  const minutesUntilMatch = timeUntilMatch / (1000 * 60);
+
+  // Verificar se dados estão incompletos
+  const isIncomplete = !completeness.has_lineups || !completeness.has_statistics || !completeness.has_h2h;
 
   // Status pós-jogo: dados estáveis
   if (status === "FT" || status === "AET" || status === "PEN") {
@@ -66,6 +71,18 @@ export function computeTTLSeconds({ status, fixture_date, completeness = {} }) {
 
   // Pré-jogo (NS ou outros): TTL baseado em tempo até kickoff
   if (status === "NS" || status === "TBD" || status === "SUSP" || status === "CANC") {
+    // Se dados incompletos e próximo do kickoff: TTL reduzido
+    if (isIncomplete && hoursUntilMatch > 0) {
+      if (hoursUntilMatch <= 0.5) { // <= 30 minutos
+        return 120; // 2 minutos
+      } else if (hoursUntilMatch <= 1.5) { // <= 90 minutos
+        return 300; // 5 minutos
+      } else if (hoursUntilMatch <= 6) { // <= 6 horas
+        return 600; // 10 minutos
+      }
+    }
+    
+    // TTL padrão quando dados completos ou jogo ainda distante
     if (hoursUntilMatch > 24) {
       return 6 * 60 * 60; // 6 horas
     } else if (hoursUntilMatch > 2) {

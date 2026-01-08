@@ -280,7 +280,7 @@ function formatFixture(f) {
   return {
     fixture_id: f.fixture.id,
     date: f.fixture.date,
-    status: f.fixture.status.short || f.fixture.status.long,
+    status: f.fixture.status?.short || "NS", // Sempre usar código curto (NS/FT/etc)
     league: {
       id: f.league.id,
       name: f.league.name,
