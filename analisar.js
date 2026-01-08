@@ -31,14 +31,14 @@ export class BetGeniusError extends Error {
 
 function teamSchema() {
   return z.object({
-    matches_used: z.number(),
-    goals_for_avg: z.number(),
-    goals_against_avg: z.number(),
-    corners_for_avg: z.number(),
-    corners_against_avg: z.number(),
-    yellow_cards_avg: z.number(),
-    shots_total_avg: z.number(),
-    possession_avg: z.number()
+    matches_used: z.number().default(0),
+    goals_for_avg: z.number().default(0),
+    goals_against_avg: z.number().default(0),
+    corners_for_avg: z.number().default(0),
+    corners_against_avg: z.number().default(0),
+    yellow_cards_avg: z.number().default(0),
+    shots_total_avg: z.number().default(0),
+    possession_avg: z.number().default(50) // 50% é neutro
   });
 }
 
@@ -53,27 +53,27 @@ const AnalyzeSchema = z.object({
   }),
 
   league_context: z.object({
-    avg_goals: z.number(),
-    avg_corners: z.number(),
-    avg_cards: z.number(),
-    tempo: z.enum(["low", "medium", "high"])
+    avg_goals: z.number().default(2.5),
+    avg_corners: z.number().default(9.5),
+    avg_cards: z.number().default(4.0),
+    tempo: z.enum(["low", "medium", "high"]).default("medium")
   }),
 
   schedule_context: z.object({
-    home_rest_days: z.number(),
-    away_rest_days: z.number(),
-    home_travel_km: z.number(),
-    away_travel_km: z.number(),
-    home_congestion_index: z.number().min(0).max(1),
-    away_congestion_index: z.number().min(0).max(1)
+    home_rest_days: z.number().default(7),
+    away_rest_days: z.number().default(7),
+    home_travel_km: z.number().default(0),
+    away_travel_km: z.number().default(0),
+    home_congestion_index: z.number().min(0).max(1).default(0.3),
+    away_congestion_index: z.number().min(0).max(1).default(0.3)
   }),
 
   referee_context: z.object({
-    name: z.string(),
-    yellow_cards_avg: z.number(),
-    red_cards_avg: z.number(),
-    penalties_per_match: z.number(),
-    fouls_called_avg: z.number()
+    name: z.string().nullable().default(null),
+    yellow_cards_avg: z.number().default(4.0),
+    red_cards_avg: z.number().default(0.2),
+    penalties_per_match: z.number().default(0.2),
+    fouls_called_avg: z.number().default(22.0)
   }),
 
   input_stats: z.object({
@@ -117,9 +117,109 @@ function pctDiff(a, b) {
 // =========================
 // MAIN
 // =========================
-export async function analyze(body) {
+/**
+ * Gera warnings baseado em dados ausentes
+ */
+function generateWarnings(parsed, completeness = {}) {
+  const warnings = [];
+  
+  if (!completeness.has_lineups) {
+    warnings.push("Escalações ainda não disponíveis — análise baseada em estatísticas gerais");
+  }
+  
+  if (!completeness.has_statistics) {
+    warnings.push("Estatísticas recentes incompletas — precisão reduzida");
+  }
+  
+  if (!completeness.has_injuries) {
+    warnings.push("Informações de lesões não disponíveis");
+  }
+  
+  if (!completeness.has_h2h) {
+    warnings.push("Histórico de confrontos diretos não disponível");
+  }
+  
+  if (!completeness.has_standings) {
+    warnings.push("Tabela de classificação não disponível — contexto da liga limitado");
+  }
+  
+  // Verificar se estatísticas são baseadas em poucos jogos
+  if (parsed.input_stats?.home?.matches_used < 3 || parsed.input_stats?.away?.matches_used < 3) {
+    warnings.push("Análise baseada em poucos jogos recentes — recomenda-se verificar novamente mais próximo do jogo");
+  }
+  
+  // Verificar se referee não está disponível
+  if (!parsed.referee_context?.name) {
+    warnings.push("Árbitro ainda não definido — usando médias padrão da liga");
+  }
+  
+  return warnings;
+}
+
+export async function analyze(body, completeness = {}) {
   try {
-    const parsed = AnalyzeSchema.parse(body); // <- parse pra lançar ZodError automaticamente
+    // Usar safeParse para não lançar erro, mas coletar issues
+    const parseResult = AnalyzeSchema.safeParse(body);
+    
+    if (!parseResult.success) {
+      // Se falhar na validação crítica, usar valores padrão e continuar
+      console.warn("⚠️ Schema validation issues, using defaults:", parseResult.error.issues);
+      
+      // Tentar parse com valores padrão aplicados
+      const parsed = AnalyzeSchema.parse({
+        ...body,
+        input_stats: {
+          home: { ...teamSchema().parse({}), ...(body.input_stats?.home || {}) },
+          away: { ...teamSchema().parse({}), ...(body.input_stats?.away || {}) }
+        },
+        league_context: {
+          avg_goals: 2.5,
+          avg_corners: 9.5,
+          avg_cards: 4.0,
+          tempo: "medium",
+          ...(body.league_context || {})
+        },
+        schedule_context: {
+          home_rest_days: 7,
+          away_rest_days: 7,
+          home_travel_km: 0,
+          away_travel_km: 0,
+          home_congestion_index: 0.3,
+          away_congestion_index: 0.3,
+          ...(body.schedule_context || {})
+        },
+        referee_context: {
+          name: null,
+          yellow_cards_avg: 4.0,
+          red_cards_avg: 0.2,
+          penalties_per_match: 0.2,
+          fouls_called_avg: 22.0,
+          ...(body.referee_context || {})
+        }
+      });
+      
+      const {
+        match,
+        league_context,
+        schedule_context,
+        referee_context,
+        input_stats
+      } = parsed;
+      
+      // Gerar warnings
+      const warnings = generateWarnings(parsed, completeness);
+      
+      // Continuar com análise usando dados disponíveis
+      return await performAnalysis({
+        match,
+        league_context,
+        schedule_context,
+        referee_context,
+        input_stats,
+        enriched_data: parsed.enriched_data,
+        warnings
+      });
+    }
 
     const {
       match,
@@ -127,155 +227,168 @@ export async function analyze(body) {
       schedule_context,
       referee_context,
       input_stats
-    } = parsed;
-
-    const home = input_stats.home;
-    const away = input_stats.away;
-
-    // =================================================
-    // 1) OUTCOME PROBABILITIES (mantém contrato antigo)
-    // =================================================
-    const outcome_probabilities = calculateOutcomeProbabilities({
-      home,
-      away,
+    } = parseResult.data;
+    
+    // Gerar warnings baseado em completeness
+    const warnings = generateWarnings(parseResult.data, completeness);
+    
+    return await performAnalysis({
+      match,
       league_context,
-      schedule_context
-    });
-
-    // =================================================
-    // 2) CONVERGENCES (mantém contrato antigo)
-    // =================================================
-    const { goals_block, goals_strength, goals_debug } = analyzeGoals(home, away, league_context);
-    const { corners_block, corners_strength, corners_debug } = analyzeCorners(home, away, league_context);
-    const { cards_block, cards_strength, cards_debug } = analyzeCards(
-      home,
-      away,
-      league_context,
-      referee_context,
       schedule_context,
-      match
-    );
-
-    const convergences = [];
-    if (goals_block) convergences.push(goals_block);
-    if (corners_block) convergences.push(corners_block);
-    if (cards_block) convergences.push(cards_block);
-
-    // =================================================
-    // 3) PREMIUM BLOCKS (incremental, sem quebrar)
-    // =================================================
-    const pre_game_blocks = {
-      match_outcome: {
-        distribution: {
-          home: outcome_probabilities.home_win,
-          draw: outcome_probabilities.draw,
-          away: outcome_probabilities.away_win
-        },
-        confidence: outcome_probabilities.confidence,
-        interpretation:
-          outcome_probabilities.confidence === "low"
-            ? "Cenário estatisticamente equilibrado (maior variância)."
-            : outcome_probabilities.confidence === "moderate"
-            ? "Assimetria moderada (jogo sensível a eventos isolados)."
-            : "Assimetria estatística mais forte (cenário mais estável)."
-      },
-
-      markets: {
-        goals: buildMarketReadingGoals(home, away, league_context, goals_strength),
-        corners: buildMarketReadingCorners(home, away, league_context, corners_strength),
-        cards: buildMarketReadingCards(
-          home,
-          away,
-          league_context,
-          referee_context,
-          schedule_context,
-          cards_strength
-        )
-      },
-
-      game_profile: {
-        tempo: league_context.tempo,
-        expected_behavior: describeGameProfile(league_context.tempo),
-        referee_profile: {
-          name: referee_context.name,
-          yellow_cards_avg: referee_context.yellow_cards_avg,
-          fouls_called_avg: referee_context.fouls_called_avg,
-          note:
-            referee_context.yellow_cards_avg > league_context.avg_cards + 0.5
-              ? "Árbitro acima da média disciplinar da liga."
-              : "Árbitro dentro do padrão disciplinar da liga."
-        },
-
-        schedule_pressure: {
-          home: Number(
-            (schedule_context.home_congestion_index + (schedule_context.home_travel_km > 800 ? 0.2 : 0)).toFixed(2)
-          ),
-          away: Number(
-            (schedule_context.away_congestion_index + (schedule_context.away_travel_km > 800 ? 0.2 : 0)).toFixed(2)
-          ),
-          note:
-            schedule_context.away_congestion_index > 0.6 || schedule_context.home_congestion_index > 0.6
-              ? "Carga de calendário pode influenciar intensidade e disciplina."
-              : "Carga de calendário sem alerta alto."
-        }
-      },
-
-      risk_factors: buildRiskFactors(outcome_probabilities)
-    };
-
-    // =================================================
-    // 4) DEBUG FACTORS (para transparência / auditoria)
-    // =================================================
-    const debug_factors = {
-      inputs: {
-        matches_used: { home: home.matches_used, away: away.matches_used }
-      },
-      goals: goals_debug,
-      corners: corners_debug,
-      cards: cards_debug,
-      outcome: outcome_probabilities._debug
-    };
-
-    // =================================================
-    // ✅ RETORNO FINAL (COMPATÍVEL + PREMIUM)
-    // =================================================
-    return {
-      meta: {
-        contract: "betgenius-premium-v2",
-        league: match.league,
-        home_team: match.home_team,
-        away_team: match.away_team,
-        referee: referee_context.name,
-        real_data_only: true,
-        fixture_id: match.fixture_id || null,
-        date: match.date || null,
-        venue: match.venue || null
-      },
-
-      // 🔒 Mantém o que já existia no v1
-      outcome_probabilities,
-      convergences,
-
-      // ✅ Blocos novos (incremental)
-      pre_game_blocks,
-      debug_factors,
-
-      // ✅ Dados enriquecidos (se disponíveis)
-      enriched_data: parsed.enriched_data || null
-    };
+      referee_context,
+      input_stats,
+      enriched_data: parseResult.data.enriched_data,
+      warnings
+    });
   } catch (err) {
-    // ✅ Converte ZodError em BetGeniusError 400 SEMPRE
-    if (err instanceof ZodError) {
-      throw new BetGeniusError("INSUFFICIENT_REAL_DATA", 400, {
-        issues: err.issues.map(i => ({
-          path: i.path.join("."),
-          message: i.message
-        }))
-      });
-    }
-    // Outros erros sobem como 500
+    // Erros não esperados: tentar análise mínima
+    console.error("❌ Erro crítico na análise:", err.message);
     throw err;
   }
+}
+
+/**
+ * Executa a análise com os dados fornecidos
+ */
+async function performAnalysis({ match, league_context, schedule_context, referee_context, input_stats, enriched_data, warnings = [] }) {
+  const home = input_stats.home;
+  const away = input_stats.away;
+
+  // =================================================
+  // 1) OUTCOME PROBABILITIES (mantém contrato antigo)
+  // =================================================
+  const outcome_probabilities = calculateOutcomeProbabilities({
+    home,
+    away,
+    league_context,
+    schedule_context
+  });
+
+  // =================================================
+  // 2) CONVERGENCES (mantém contrato antigo)
+  // =================================================
+  const { goals_block, goals_strength, goals_debug } = analyzeGoals(home, away, league_context);
+  const { corners_block, corners_strength, corners_debug } = analyzeCorners(home, away, league_context);
+  const { cards_block, cards_strength, cards_debug } = analyzeCards(
+    home,
+    away,
+    league_context,
+    referee_context,
+    schedule_context,
+    match
+  );
+
+  const convergences = [];
+  if (goals_block) convergences.push(goals_block);
+  if (corners_block) convergences.push(corners_block);
+  if (cards_block) convergences.push(cards_block);
+
+  // =================================================
+  // 3) PREMIUM BLOCKS (incremental, sem quebrar)
+  // =================================================
+  const pre_game_blocks = {
+    match_outcome: {
+      distribution: {
+        home: outcome_probabilities.home_win,
+        draw: outcome_probabilities.draw,
+        away: outcome_probabilities.away_win
+      },
+      confidence: outcome_probabilities.confidence,
+      interpretation:
+        outcome_probabilities.confidence === "low"
+          ? "Cenário estatisticamente equilibrado (maior variância)."
+          : outcome_probabilities.confidence === "moderate"
+          ? "Assimetria moderada (jogo sensível a eventos isolados)."
+          : "Assimetria estatística mais forte (cenário mais estável)."
+    },
+
+    markets: {
+      goals: buildMarketReadingGoals(home, away, league_context, goals_strength),
+      corners: buildMarketReadingCorners(home, away, league_context, corners_strength),
+      cards: buildMarketReadingCards(
+        home,
+        away,
+        league_context,
+        referee_context,
+        schedule_context,
+        cards_strength
+      )
+    },
+
+    game_profile: {
+      tempo: league_context.tempo,
+      expected_behavior: describeGameProfile(league_context.tempo),
+      referee_profile: {
+        name: referee_context.name || "Não informado",
+        yellow_cards_avg: referee_context.yellow_cards_avg,
+        fouls_called_avg: referee_context.fouls_called_avg,
+        note:
+          referee_context.yellow_cards_avg > league_context.avg_cards + 0.5
+            ? "Árbitro acima da média disciplinar da liga."
+            : "Árbitro dentro do padrão disciplinar da liga."
+      },
+
+      schedule_pressure: {
+        home: Number(
+          (schedule_context.home_congestion_index + (schedule_context.home_travel_km > 800 ? 0.2 : 0)).toFixed(2)
+        ),
+        away: Number(
+          (schedule_context.away_congestion_index + (schedule_context.away_travel_km > 800 ? 0.2 : 0)).toFixed(2)
+        ),
+        note:
+          schedule_context.away_congestion_index > 0.6 || schedule_context.home_congestion_index > 0.6
+            ? "Carga de calendário pode influenciar intensidade e disciplina."
+            : "Carga de calendário sem alerta alto."
+      }
+    },
+
+    risk_factors: buildRiskFactors(outcome_probabilities)
+  };
+
+  // =================================================
+  // 4) DEBUG FACTORS (para transparência / auditoria)
+  // =================================================
+  const debug_factors = {
+    inputs: {
+      matches_used: { home: home.matches_used, away: away.matches_used }
+    },
+    goals: goals_debug,
+    corners: corners_debug,
+    cards: cards_debug,
+    outcome: outcome_probabilities._debug
+  };
+
+  // =================================================
+  // ✅ RETORNO FINAL (COMPATÍVEL + PREMIUM)
+  // =================================================
+  return {
+    meta: {
+      contract: "betgenius-premium-v2",
+      league: match.league,
+      home_team: match.home_team,
+      away_team: match.away_team,
+      referee: referee_context.name || "Não informado",
+      real_data_only: true,
+      fixture_id: match.fixture_id || null,
+      date: match.date || null,
+      venue: match.venue || null
+    },
+
+    // 🔒 Mantém o que já existia no v1
+    outcome_probabilities,
+    convergences,
+
+    // ✅ Blocos novos (incremental)
+    pre_game_blocks,
+    debug_factors,
+
+    // ✅ Dados enriquecidos (se disponíveis)
+    enriched_data: enriched_data || null,
+    
+    // ✅ Warnings sobre dados ausentes
+    warnings: warnings.length > 0 ? warnings : undefined
+  };
 }
 
 // =========================

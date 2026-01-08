@@ -97,9 +97,12 @@ export function shouldForceRevalidate({ cached_status, current_status, fixture_d
     return { force: true, reason: "STATUS_CHANGED" };
   }
 
-  // Pré-jogo próximo sem lineups: anti "cache congelado incompleto"
-  if (cached_status === "NS" && hoursUntilMatch < 2 && hoursUntilMatch > 0) {
-    if (!completeness?.has_lineups) {
+  // Pré-jogo próximo sem dados importantes: anti "cache congelado incompleto"
+  // Expandido para 6 horas (conforme solicitado)
+  if (cached_status === "NS" && hoursUntilMatch < 6 && hoursUntilMatch > 0) {
+    // Se faltam dados importantes e estamos próximos do jogo, revalidar
+    const missingImportant = !completeness?.has_lineups || !completeness?.has_statistics;
+    if (missingImportant) {
       return { force: true, reason: "INCOMPLETE_NEAR_KICKOFF" };
     }
   }
@@ -175,6 +178,9 @@ export async function saveMatchCache(fixtureId, apiData, analyzeFormat = null, a
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
 
+    // Marcar como partial se dados importantes estão faltando
+    const isPartial = !completeness.has_lineups || !completeness.has_statistics || !completeness.has_h2h;
+    
     const cacheDoc = {
       fixture_id: fixtureId,
       provider: "api-football",
@@ -183,6 +189,7 @@ export async function saveMatchCache(fixtureId, apiData, analyzeFormat = null, a
       cached_at: now.toISOString(),
       expires_at: expiresAt,
       completeness: completeness,
+      partial: isPartial, // Flag para indicar dados parciais
       api_data: apiData,
       analyze_format: analyzeFormat,
       analysis: analysis

@@ -504,6 +504,13 @@ components:
               type: boolean
               description: Whether last 5 matches data is available
               example: false
+        warnings:
+          type: array
+          nullable: true
+          description: Array of warnings about missing or incomplete data. Analysis is always returned, but warnings indicate limitations.
+          items:
+            type: string
+          example: ["Escalações ainda não disponíveis — análise baseada em estatísticas gerais", "Estatísticas recentes incompletas — precisão reduzida"]
         cache:
           type: object
           description: Cache metadata for the match data

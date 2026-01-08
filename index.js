@@ -596,23 +596,75 @@ app.post("/analyze-from-api", async (req, res) => {
       });
     }
 
-    // 3. Analisar com a engine
+    // 3. Analisar com a engine (sempre retorna, mesmo com dados parciais)
     const modeResult = detectMode(question);
     const finalProfile = profile || modeResult.suggested_profile || "technical";
     
     let analysis;
+    let warnings = [];
+    
     try {
-      analysis = await analyze(analyzeFormat);
+      // Passar completeness para gerar warnings apropriados
+      analysis = await analyze(analyzeFormat, completeness);
       console.log("✅ Análise concluída");
+      
+      // Coletar warnings da análise
+      if (analysis.warnings) {
+        warnings = analysis.warnings;
+        delete analysis.warnings; // Remover do objeto analysis (já incluído separadamente)
+      }
     } catch (analyzeErr) {
-      console.error("❌ Erro na análise:", analyzeErr.message);
-      return res.status(422).json({
-        error: "ANALYZE_FAILED",
-        message: "Could not analyze the match",
-        details: analyzeErr.message,
-        cache: cacheMeta,
-        completeness
-      });
+      // Se ainda assim falhar (erro não esperado), tentar com valores mínimos
+      console.warn("⚠️ Erro na análise, tentando com valores mínimos:", analyzeErr.message);
+      
+      try {
+        // Forçar valores mínimos e tentar novamente
+        const minimalFormat = {
+          ...analyzeFormat,
+          input_stats: {
+            home: {
+              matches_used: 0,
+              goals_for_avg: 0,
+              goals_against_avg: 0,
+              corners_for_avg: 0,
+              corners_against_avg: 0,
+              yellow_cards_avg: 0,
+              shots_total_avg: 0,
+              possession_avg: 50,
+              ...(analyzeFormat.input_stats?.home || {})
+            },
+            away: {
+              matches_used: 0,
+              goals_for_avg: 0,
+              goals_against_avg: 0,
+              corners_for_avg: 0,
+              corners_against_avg: 0,
+              yellow_cards_avg: 0,
+              shots_total_avg: 0,
+              possession_avg: 50,
+              ...(analyzeFormat.input_stats?.away || {})
+            }
+          }
+        };
+        
+        analysis = await analyze(minimalFormat, completeness);
+        warnings.push("Análise realizada com dados limitados — precisão significativamente reduzida");
+        
+        if (analysis.warnings) {
+          warnings = [...warnings, ...analysis.warnings];
+          delete analysis.warnings;
+        }
+      } catch (fallbackErr) {
+        // Último recurso: retornar análise básica
+        console.error("❌ Erro crítico na análise:", fallbackErr.message);
+        return res.status(500).json({
+          error: "ANALYZE_CRITICAL_FAILED",
+          message: "Could not perform analysis even with minimal data",
+          details: fallbackErr.message,
+          cache: cacheMeta,
+          completeness
+        });
+      }
     }
 
     // 4. Aplicar profile
@@ -644,7 +696,7 @@ app.post("/analyze-from-api", async (req, res) => {
       }
     }
 
-    // ✅ Resposta final estruturada com metadados de cache
+    // ✅ Resposta final estruturada com metadados de cache e warnings
     return res.json({
       success: true,
       mode: modeResult.mode || "pre_game",
@@ -660,6 +712,7 @@ app.post("/analyze-from-api", async (req, res) => {
       analysis,
       completeness,
       cache: cacheMeta,
+      warnings: warnings.length > 0 ? warnings : undefined,
       data_summary: {
         has_statistics: !!apiData.statistics?.length,
         has_h2h: !!apiData.h2h?.length,
